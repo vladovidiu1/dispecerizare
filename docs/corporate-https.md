@@ -1,5 +1,7 @@
 # HTTPS intern și pregătirea pilotului corporativ
 
+[Documentație](README.md) · [Manual administrator](administrator-guide.md) · [Depanare](troubleshooting.md)
+
 Acest ghid pregătește o instalare pentru evaluarea IT/Cyber Security. Nu certifică aplicația și nu demonstrează acceptarea de către Zscaler sau politicile companiei. HTTPS protejează traficul browser–aplicație; nu creează rutarea între calculatoare și nu înlocuiește SSO/MFA, EDR/antivirus, backupurile sau un audit.
 
 ## Arhitectura pregătită

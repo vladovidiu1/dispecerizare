@@ -1,5 +1,7 @@
 # Testarea locală: rețea, conversații, atașamente, ITL și EMMA
 
+[Documentație](README.md) · [Manual administrator](administrator-guide.md) · [Depanare](troubleshooting.md)
+
 ## Actualizarea unei instalări Windows existente
 
 Oprește terminalele cu Ctrl+C. În pgAdmin fă un backup al bazei `relay` (Backup → Custom). Păstrează `.env` și `.relay`, inclusiv cheia credențialelor. Copiază fișierele noului ZIP peste proiect și rulează în folder:

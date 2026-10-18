@@ -1,5 +1,7 @@
 # Conectarea emailului pentru primul pilot
 
+[Documentație](README.md) · [Manual administrator](administrator-guide.md) · [Depanare](troubleshooting.md)
+
 Aplicația, PostgreSQL și Ollama rulează local. Furnizorul de email rămâne serviciul Microsoft/Google/Yahoo: conexiunea la Internet și autorizarea lui sunt necesare. Installerul executabil și instalarea ca serviciu Windows nu sunt încă livrate; în pilot pornește backendul și interfața din terminale. Monitorizarea continuă după logoutul administratorului, cât timp backendul rămâne pornit și calculatorul nu intră în sleep.
 
 ## Actualizare Windows, fără pierderea configurației

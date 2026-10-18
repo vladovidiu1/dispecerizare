@@ -1,4 +1,6 @@
-# Contract API — prima versiune
+# Referință API — Relay 0.1.0
+
+[Documentație](README.md) · [Arhitectură](architecture.md) · [Securitate](security.md)
 
 Toate rutele sunt sub `/api`. JSON UTF-8, identificatori UUID. Cookie-urile utilizatorilor și cheile robotului sunt mecanisme separate. Niciun endpoint nu acceptă `organizationId` ca override după autentificare: firma este extrasă din sesiune/cheie.
 
@@ -14,8 +16,8 @@ Toate rutele sunt sub `/api`. JSON UTF-8, identificatori UUID. Cookie-urile util
 | GET /examples                    | Exemple `{id,skillId,subject,body}`, maximum 1000; utilizator sau robot                                 |
 | POST /examples                   | Admin: `{skillId,subject,body}`                                                                         |
 | GET /agents                      | Utilizator: agenți, competențe, disponibilitate, capacitate, încărcare                                  |
-| POST /agents                     | Admin: `{name,email,password,skills:[UUID],capacity:20}`; parola ≥12 caractere                          |
-| PATCH /agents/:id                | Admin: oricare dintre `{available,capacity,skills:[UUID],emmaCodes:[string]}`                           |
+| POST /agents                     | Admin: `{name,email,password,skills:[UUID],capacity:20,emmaCodes:[string]}`; parola ≥12 caractere       |
+| PATCH /agents/:id                | Admin: oricare dintre `{available,active,capacity,skills:[UUID],emmaCodes:[string]}`                    |
 | GET /mailboxes                   | Admin: adrese sursă `{id,provider,address}`                                                             |
 | POST /mailboxes                  | Admin: `{provider:"outlook",address:"shared@example.com"}`; provider este text liber                    |
 | POST /keys                       | Admin: `{name:"Robot Ollama"}` → `{id,token}`; tokenul se returnează o singură dată                     |
@@ -26,13 +28,13 @@ Toate rutele sunt sub `/api`. JSON UTF-8, identificatori UUID. Cookie-urile util
 | GET /messages/:id/notes          | Note interne, autor și dată                                                                             |
 | POST /messages/:id/notes         | `{body}`; salvează o notă internă, fără trimitere email                                                 |
 
-Statusuri: `Nou`, `În lucru`, `Rezolvat`. Priorități: `Scăzută`, `Medie`, `Ridicată`. `assignedTo:null` dezalocă mesajul; `skillId:null` elimină competența manuală. Repartizarea manuală nu șterge clasificarea originală. Schimbarea efectivă a competenței, fără `assignedTo` explicit, readuce taskul la `Nou`, elimină repartizarea anterioară și selectează automat un utilizator eligibil după competență, disponibilitate și capacitate, fără un apel AI. Lipsa unui agent eligibil lasă taskul nealocat cu eveniment `review_required`. Schimbarea către aceeași competență nu reia distribuirea. Agentul trebuie să aleagă o competență validă, nenulă, din aceeași firmă; nu poate schimba prioritatea sau alege responsabilul. Trimite corecția competenței separat de actualizarea stării. Administratorul poate trimite `skillId` și `assignedTo` împreună pentru o corecție și repartizare explicită, fără restricții de competență/disponibilitate/capacitate; ținta trebuie să fie activă și din aceeași firmă. Istoricul păstrează autorul corecției, vechiul/noul tag, starea și responsabilul. Mesajele rămase nealocate nu sunt redistribuite ulterior în fundal în această versiune.
+Statusuri: `Nou`, `În lucru`, `Rezolvat`. Priorități: `Scăzută`, `Medie`, `Ridicată`. `assignedTo:null` dezalocă mesajul; `skillId:null` elimină competența manuală. Repartizarea manuală nu șterge clasificarea originală. Schimbarea efectivă a competenței, fără `assignedTo` explicit, readuce taskul la `Nou`, elimină repartizarea anterioară și selectează automat un utilizator eligibil după competență, disponibilitate și capacitate, fără un apel AI. Lipsa unui agent eligibil lasă taskul nealocat cu eveniment `review_required`. Schimbarea către aceeași competență nu reia distribuirea. Agentul trebuie să aleagă o competență validă, nenulă, din aceeași firmă; nu poate schimba prioritatea sau alege responsabilul. Trimite corecția competenței separat de actualizarea stării. Administratorul poate trimite `skillId` și `assignedTo` împreună pentru o corecție și repartizare explicită, fără restricții de competență/disponibilitate/capacitate; ținta trebuie să fie activă și din aceeași firmă. Istoricul păstrează autorul corecției, vechiul/noul tag, starea și responsabilul. Taskurile nealocate clasificate cu încredere suficientă sau confirmate de om pot fi distribuite în fundal când apare capacitate. Cele cu încredere redusă rămân pentru verificare.
 
 Administrează cheile dintr-un client API autentificat cu cookie sau din consola browserului autentificat folosind `fetch('/api/keys', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Robot'})})`. Păstrează tokenul doar în configurarea securizată a robotului. Nu îl include în repository, URL, loguri sau în variabile `VITE_*`. Baza de date păstrează numai hashul tokenului.
 
 ## Robot: POST /ingest
 
-Trimite `Authorization: Bearer <token>` și `Content-Type: application/json` prin HTTPS. Nu există apeluri specifice Microsoft/Google/Yahoo în backend.
+Trimite `Authorization: Bearer <token>` și `Content-Type: application/json` prin HTTPS. Această rută este independentă de furnizor; conectorii integrați Microsoft Graph și IMAP sunt disponibili separat prin configurarea căsuțelor.
 
 ```json
 {
@@ -48,7 +50,7 @@ Trimite `Authorization: Bearer <token>` și `Content-Type: application/json` pri
   "classification": {
     "skillId": "UUID competență din GET /skills",
     "confidence": 0.92,
-    "model": "qwen:8b",
+    "model": "qwen3:8b",
     "promptVersion": "dispatch-v1",
     "reason": "Solicitare despre factură"
   }
@@ -57,7 +59,7 @@ Trimite `Authorization: Bearer <token>` și `Content-Type: application/json` pri
 
 `classification` poate lipsi: mesajul ajunge nealocat, pentru verificare. Competența necunoscută este respinsă cu 400, fără inserare parțială; robotul poate retrimite fără clasificare pentru verificare manuală. Backendul alege agentul, nu acceptă un agent arbitrar din payloadul de ingestie.
 
-Răspuns: `201 {id,duplicate:false}` la prima inserare; `200 {id,duplicate:true}` la retrimiterea aceluiași `(mailboxId,externalId)`. Retrimiterea nu reclasifică și nu suprascrie mesajul existent. Normalizează și păstrează ID-ul stabil (de exemplu ID imuabil Outlook, ID Gmail sau UID + UIDVALIDITY IMAP). Nu folosi subiectul sau ora de procesare drept ID. Același ID în două adrese sursă diferite reprezintă două mesaje distincte în această versiune.
+Răspuns: `201 {id,duplicate:false,updated}` la prima inserare sau actualizare de conversație; `200 {id,duplicate:true,updated}` la retrimiterea aceluiași `(mailboxId,externalId)`. Retrimiterea nu reclasifică și nu suprascrie mesajul existent. Normalizează și păstrează ID-ul stabil (de exemplu ID imuabil Outlook, ID Gmail sau UID + UIDVALIDITY IMAP). Nu folosi subiectul sau ora de procesare drept ID. Același ID în două adrese sursă diferite reprezintă două mesaje distincte. Un email nou cu referințe valide poate actualiza același task (`updated:true`), păstrând intrarea proprie în conversație.
 
 Robotul confirmă emailul drept procesat doar după 200/201. La timeout poate retrimite exact același identificator. La 401 verifică/revocă cheia; la 400 corectează payloadul sau trimite în coada de verificare; la 429/5xx aplică reîncercări cu întârziere progresivă și checkpoint persistent. Această logică rămâne în robot în versiunea curentă.
 
@@ -65,7 +67,7 @@ Client Python fără dependențe externe: `scripts/relay_client.py`, cu `RELAY_A
 
 ## Erori și limite
 
-Erori JSON `{error,issues?}`: 400 validare, 401 autentificare, 403 drepturi/origine, 404 resursă inexistentă sau inaccesibilă, 409 dublură configurare, 413 payload prea mare, 429 limită de cereri, 500 eroare internă. API-ul limitează cererile la 300/minut/IP și autentificările la 20/15 minute/IP. Payload maxim 300 KB; text mesaj maxim 200.000 caractere. Interogările sunt parametrizate; HTML-ul nu este randat în interfață.
+Erori JSON `{error,issues?}`: 400 validare, 401 autentificare, 403 drepturi/origine, 404 resursă inexistentă sau inaccesibilă, 409 conflict de configurare/stare sau resursă ocupată, 413 payload prea mare, 429 limită de cereri, 500 eroare internă. API-ul limitează cererile la 300/minut/IP și autentificările la 20/15 minute/IP; schimbarea parolei are maximum 10 cereri/15 minute/utilizator. Corpul JSON are maximum 300 KB (rutele de încărcare binară au limite separate); text mesaj maxim 200.000 caractere. Interogările sunt parametrizate; HTML-ul nu este randat în interfață.
 
 Istoricul este append-only prin API, nu un jurnal criptografic sau protejat împotriva unui administrator al bazei de date.
 
@@ -122,7 +124,7 @@ Migrarea 003 este necesară. Vezi [workflow-uri locale](local-workflows.md) pent
 - `GET /emma/rules`: admin. `POST`: `{senderEmail,subjectContains,sheetName,headerRow,codeColumn,skillId,enabled}`. `PATCH /emma/rules/:id`: `{enabled}`. `DELETE` pe aceeași rută elimină regula.
 - `POST /emma/preview`: admin, corp XLSX `application/octet-stream`, maximum 10 MB; `{sheets:[{name,rows,preview:[{row,cells:[{column,text}]}]}]}`. Nu persistă fișierul și nu creează taskuri.
 - `GET /emma/imports`: admin, ultimele 50 rezultate cu fișier, task părinte, număr creat/ignorat și eroare. `POST /messages/:id/emma`: admin, aplică regulile active pe atașamentele deja importate ale taskului; reaplicarea importurilor încheiate nu dublează taskuri.
-- `POST/PATCH /agents`: `emmaCodes:[string]`, maximum 200 coduri, fiecare maximum 100 caractere; majuscule și duplicate eliminate. GET /agents le expune drept emmaCodes.
+- `POST /agents` și `PATCH /agents/:id`: `emmaCodes:[string]`, maximum 200 coduri, fiecare maximum 100 caractere; majuscule și duplicate eliminate. GET /agents le expune drept emmaCodes.
 - `GET /dashboard`: utilizator, scope admin=firmă/agent=taskuri proprii; `{summary,daily,categories,agents}`; agregări din toate taskurile, independent de paginare.
 
 Fișierele se păstrează în PostgreSQL, pe server. Limitele raw upload sunt specifice rutelor, nu măresc limita JSON a întregului API. Cheile roboților nu pot descărca documente/atașamente sau accesa aceste ecrane. Originile de browser sunt validate față de APP_ORIGIN și lista exactă APP_ORIGINS, fără wildcarduri.

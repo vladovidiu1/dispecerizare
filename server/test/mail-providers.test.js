@@ -218,7 +218,7 @@ test("oversize IMAP messages retain metadata for manual review without downloadi
       },
       async fetchOne(uid, fields) {
         if (fields.source) source = true;
-        return { size: 3_000_000, envelope: { subject: "Mare" } };
+        return { size: 31_000_000, envelope: { subject: "Mare" } };
       },
       async logout() {},
       close() {},
@@ -370,3 +370,102 @@ test("Outlook start-now verifies access without fetching mail and anchors future
   );
 });
 let anchor;
+
+test("IMAP imports RFC reply references and binary attachments from MIME without marking mail read", async () => {
+  const source = Buffer.from(
+    'From: Client <client@example.test>\r\nTo: inbox@example.test\r\nSubject: Re: Resetare\r\nMessage-ID: <reply@example.test>\r\nIn-Reply-To: <root@example.test>\r\nReferences: <root@example.test> <previous@example.test>\r\nDate: Sun, 18 Oct 2026 12:00:00 +0000\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary="fixture"\r\n\r\n--fixture\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nActualizare\r\n--fixture\r\nContent-Type: application/pdf\r\nContent-Disposition: attachment; filename="document.pdf"\r\nContent-Transfer-Encoding: base64\r\n\r\nZml4dHVyZQ==\r\n--fixture--\r\n',
+  );
+  const provider = createMailProviders({
+    imapFactory: () => ({
+      on() {},
+      async connect() {},
+      async mailboxOpen(name, options) {
+        assert.equal(options.readOnly, true);
+        return { uidValidity: 1n };
+      },
+      async search() {
+        return [1];
+      },
+      async fetchOne(uid, fields) {
+        return fields.source
+          ? { source }
+          : { size: source.length, envelope: {} };
+      },
+      async logout() {},
+      close() {},
+    }),
+  });
+  const result = await provider.scan(
+      { sync_state: {}, created_at: new Date(), initial_days: 1 },
+      {
+        provider: "yahoo",
+        address: "inbox@example.test",
+        appPassword: "fixture",
+      },
+    ),
+    m = result.messages[0];
+  assert.equal(m.internetMessageId, "<reply@example.test>");
+  assert.equal(m.inReplyTo, "<root@example.test>");
+  assert.deepEqual(m.references, [
+    "<root@example.test>",
+    "<previous@example.test>",
+  ]);
+  assert.equal(m.attachments[0].content.toString(), "fixture");
+  assert.equal(m.attachments[0].filename, "document.pdf");
+});
+test("Outlook imports conversation IDs, internet message IDs and file attachments without executing them", async () => {
+  const original = globalThis.fetch;
+  const paths = [];
+  globalThis.fetch = async (url, options) => {
+    const u = new URL(url);
+    paths.push(u.pathname);
+    if (u.hostname === "login.microsoftonline.com")
+      return Response.json({ access_token: "fixture" });
+    if (u.pathname.endsWith("/attachments"))
+      return Response.json({
+        value: [
+          {
+            "@odata.type": "#microsoft.graph.fileAttachment",
+            name: "report.xlsx",
+            contentType: "application/octet-stream",
+            size: 7,
+            contentBytes: Buffer.from("fixture").toString("base64"),
+          },
+        ],
+      });
+    return Response.json({
+      value: [
+        {
+          id: "mail-1",
+          conversationId: "thread-1",
+          internetMessageId: "<graph@example.test>",
+          hasAttachments: true,
+          subject: "Raport",
+          body: { contentType: "text", content: "Actualizare" },
+          receivedDateTime: "2026-10-18T12:00:00Z",
+        },
+      ],
+      "@odata.deltaLink":
+        "https://graph.microsoft.com/v1.0/me/messages/delta?token=fixture",
+    });
+  };
+  try {
+    const result = await createMailProviders().scan(
+      { sync_state: {}, created_at: new Date(), initial_days: 1 },
+      {
+        provider: "outlook",
+        address: "inbox@example.test",
+        clientId: "fixture",
+        tenant: "common",
+        refreshToken: "fixture",
+      },
+    );
+    const m = result.messages[0];
+    assert.equal(m.threadId, "thread-1");
+    assert.equal(m.internetMessageId, "<graph@example.test>");
+    assert.equal(m.attachments[0].content.toString(), "fixture");
+    assert.ok(paths.some((p) => p.endsWith("/attachments")));
+  } finally {
+    globalThis.fetch = original;
+  }
+});

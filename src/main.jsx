@@ -31,6 +31,9 @@ import { api, backendEnabled } from "./api";
 import Login from "./Login";
 import AiTest from "./AiTest";
 import Mailboxes from "./Mailboxes";
+import WorkflowSettings from "./WorkflowSettings";
+import TaskResources from "./TaskResources";
+import Dashboard from "./Dashboard";
 const initial = [
   {
     id: 1048,
@@ -158,6 +161,7 @@ const agents = [
   },
 ];
 function App() {
+  const [dashboard, setDashboard] = useState(null);
   const [user, setUser] = useState(null),
     [authLoaded, setAuthLoaded] = useState(!backendEnabled),
     [skills, setSkills] = useState([]),
@@ -181,15 +185,17 @@ function App() {
     setTimeout(() => setToast(""), 3500);
   };
   async function refresh(pageOffset = offset) {
-    const [m, a, s] = await Promise.all([
+    const [m, a, s, d] = await Promise.all([
       api("/messages?limit=100&offset=" + pageOffset),
       api("/agents"),
       api("/skills"),
+      api("/dashboard"),
     ]);
     setMessages(m.items);
     setTotal(m.total);
     setTeam(a);
     setSkills(s);
+    setDashboard(d);
   }
   useEffect(() => {
     if (!backendEnabled) return;
@@ -312,6 +318,16 @@ function App() {
   function describeEvent(h) {
     const person = (id) =>
       team.find((a) => a.id === id)?.name || id || "Nealocat";
+    if (h.type === "email_update")
+      return (
+        "Email nou în conversație" +
+        (h.data.reopened ? " · task redeschis" : "")
+      );
+    if (h.type === "emma_created")
+      return `${h.data.filename} · rând ${h.data.row} · cod ${h.data.code}`;
+    if (h.type === "emma_imported")
+      return `${h.data.filename} · ${h.data.created} taskuri · ${h.data.ignored} rânduri ignorate`;
+    if (h.type === "emma_failed") return h.data.reason;
     if (h.type === "tag_confirmed")
       return (
         skills.find((s) => s.id === h.data.skillId)?.name || "Fără competență"
@@ -357,6 +373,7 @@ function App() {
       ? [
           ["ai", Sparkles, "Test AI local"],
           ["mailboxes", Mail, "Căsuțe email"],
+          ["workflows", Sparkles, "ITL & EMMA"],
         ]
       : []),
   ];
@@ -392,7 +409,9 @@ function App() {
             .filter(
               (x) =>
                 role === "Administrator" ||
-                !["agents", "rules", "ai", "mailboxes"].includes(x[0]),
+                !["agents", "rules", "ai", "mailboxes", "workflows"].includes(
+                  x[0],
+                ),
             )
             .map(([id, Icon, label]) => (
               <button
@@ -566,7 +585,7 @@ function App() {
                   }
                 >
                   <Clock3 size={16} />
-                  Astăzi
+                  {backendEnabled ? "Toate solicitările" : "Astăzi"}
                   <ChevronDown size={15} />
                 </button>
               </div>
@@ -577,7 +596,9 @@ function App() {
                       [
                         Mail,
                         "Mesaje primite",
-                        String(backendEnabled ? total : 48),
+                        String(
+                          backendEnabled ? (dashboard?.summary.total ?? 0) : 48,
+                        ),
                         backendEnabled ? "" : "12%",
                         backendEnabled
                           ? "Total mesaje vizibile"
@@ -588,7 +609,9 @@ function App() {
                         Inbox,
                         "În așteptare",
                         String(
-                          messages.filter((m) => m.status === "Nou").length,
+                          backendEnabled
+                            ? (dashboard?.summary.waiting ?? 0)
+                            : messages.filter((m) => m.status === "Nou").length,
                         ),
                         "",
                         "Necesită atenția echipei",
@@ -597,24 +620,32 @@ function App() {
                       [
                         CheckCheck,
                         backendEnabled
-                          ? "Rezolvate în pagină"
+                          ? "Solicitări rezolvate"
                           : "Rezolvate astăzi",
                         String(
-                          (backendEnabled ? 0 : 31) +
-                            messages.filter((m) => m.status === "Rezolvat")
-                              .length,
+                          backendEnabled
+                            ? (dashboard?.summary.resolved ?? 0)
+                            : 31 +
+                                messages.filter((m) => m.status === "Rezolvat")
+                                  .length,
                         ),
                         backendEnabled ? "" : "18%",
-                        backendEnabled ? "În pagina curentă" : "față de ieri",
+                        backendEnabled
+                          ? "Din toate solicitările vizibile"
+                          : "față de ieri",
                         "green",
                       ],
                       [
                         Clock3,
-                        "Timp mediu de răspuns",
-                        backendEnabled ? "—" : "14",
+                        backendEnabled
+                          ? "Timp mediu de rezolvare"
+                          : "Timp mediu de răspuns",
+                        backendEnabled
+                          ? String(dashboard?.summary.resolutionMinutes ?? "—")
+                          : "14",
                         backendEnabled ? "" : "8%",
                         backendEnabled
-                          ? "În curs de implementare"
+                          ? "De la crearea taskului până la rezolvare"
                           : "mai rapid decât ieri",
                         "blue",
                       ],
@@ -646,6 +677,7 @@ function App() {
                       </div>
                     ))}
                   </div>
+                  {backendEnabled && <Dashboard data={dashboard} />}
                   <div className="overview-bottom">
                     <span className="live-dot" /> Echipa ta este pe poziții.{" "}
                     <strong>
@@ -689,7 +721,18 @@ function App() {
                     </div>
                     <span>{current.time}</span>
                   </div>
-                  <p className="email-body">{current.text}</p>
+                  {!backendEnabled && (
+                    <p className="email-body">{current.text}</p>
+                  )}
+                  {backendEnabled && (
+                    <TaskResources
+                      key={current.id}
+                      id={current.id}
+                      version={current.receivedAt}
+                      admin={role === "Administrator"}
+                      notify={notify}
+                    />
+                  )}
                   <div className="detail-meta">
                     <span>
                       Competență:{" "}
@@ -867,6 +910,10 @@ function App() {
                           <span>
                             {{
                               received: "Mesaj primit",
+                              email_update: "Email adăugat în conversație",
+                              emma_created: "Task creat din Excel EMMA",
+                              emma_imported: "Raport EMMA procesat",
+                              emma_failed: "Import EMMA necesită verificare",
                               classified: "Clasificat",
                               assigned: "Repartizat",
                               review_required: "Necesită verificare",
@@ -1213,6 +1260,74 @@ function App() {
                         </button>
                       </div>
                     )}
+                    {backendEnabled && (
+                      <>
+                        <label className="emma-codes">
+                          Coduri EMMA acceptate
+                          <input
+                            aria-label={"Coduri EMMA " + a.name}
+                            defaultValue={(a.emmaCodes || []).join(", ")}
+                            key={(a.emmaCodes || []).join(",")}
+                            placeholder="ex. E01, E07"
+                            onBlur={async (e) => {
+                              const emmaCodes = [
+                                ...new Set(
+                                  e.target.value
+                                    .split(/[,;\n]/)
+                                    .map((s) => s.trim().toUpperCase())
+                                    .filter(Boolean),
+                                ),
+                              ];
+                              if (
+                                JSON.stringify(emmaCodes) ===
+                                JSON.stringify(a.emmaCodes || [])
+                              )
+                                return;
+                              try {
+                                await api("/agents/" + a.id, {
+                                  method: "PATCH",
+                                  body: { emmaCodes },
+                                });
+                                await refresh();
+                                notify("Coduri EMMA salvate.");
+                              } catch (err) {
+                                notify(err.message);
+                              }
+                            }}
+                          />
+                        </label>
+                        <details>
+                          <summary>Modifică competențele</summary>
+                          {skills.map((skill) => (
+                            <label className="checkbox" key={skill.id}>
+                              <input
+                                type="checkbox"
+                                checked={a.skills.includes(skill.name)}
+                                onChange={async (e) => {
+                                  const selected = skills
+                                    .filter((s) =>
+                                      s.id === skill.id
+                                        ? e.target.checked
+                                        : a.skills.includes(s.name),
+                                    )
+                                    .map((s) => s.id);
+                                  try {
+                                    await api("/agents/" + a.id, {
+                                      method: "PATCH",
+                                      body: { skills: selected },
+                                    });
+                                    await refresh();
+                                  } catch (err) {
+                                    notify(err.message);
+                                  }
+                                }}
+                              />
+                              {skill.name}
+                            </label>
+                          ))}
+                        </details>
+                      </>
+                    )}
                     <div className="agent-workload">
                       <span>Mesaje active</span>
                       <strong>{a.load}</strong>
@@ -1230,6 +1345,8 @@ function App() {
                 ))}
               </div>
             </>
+          ) : page === "workflows" ? (
+            <WorkflowSettings skills={skills} notify={notify} />
           ) : page === "mailboxes" ? (
             <Mailboxes />
           ) : page === "ai" ? (
@@ -1246,11 +1363,13 @@ function App() {
               <span className="feature-icon">
                 <SlidersHorizontal size={28} />
               </span>
-              <span className="eyebrow">URMĂTORUL PAS</span>
-              <h1>Fiecare mesaj își va găsi omul.</h1>
+              <span className="eyebrow">DISTRIBUIRE DUPĂ COMPETENȚE</span>
+              <h1>Fiecare mesaj își găsește omul.</h1>
               <p>
-                Aici vom defini regulile de distribuire în funcție de
-                competențe, disponibilitate și volumul de lucru al agenților.
+                Distribuirea automată alege agenții disponibili cu competența
+                cerută și cele mai puține taskuri deschise, fără a depăși
+                capacitatea. Taskurile în așteptare sunt repartizate când se
+                eliberează un loc. Administratorul poate aloca manual oricui.
               </p>
               <div className="flow">
                 <span>
@@ -1270,7 +1389,7 @@ function App() {
               </div>
               <div className="info-note">
                 {backendEnabled
-                  ? "API-ul distribuie mesajele clasificate cu încredere de minimum 75% către agenți eligibili, disponibili și sub capacitate. Celelalte rămân nealocate pentru verificare. Configurarea regulilor din această pagină urmează ulterior."
+                  ? "API-ul distribuie mesajele clasificate cu încredere de minimum 75% către agenți eligibili, disponibili și sub capacitate. Celelalte rămân nealocate pentru verificare. Competențele și capacitatea se configurează în Echipă & competențe; regulile pentru rapoarte Excel se găsesc în ITL & EMMA."
                   : "Momentan construim interfața. Distribuirea automată va fi implementată în etapa următoare."}
               </div>
             </section>
@@ -1293,7 +1412,7 @@ function App() {
               </label>
               <div className="info-note">
                 {backendEnabled
-                  ? "Datele sunt păstrate în PostgreSQL. Robotul poate trimite mesaje prin API. Conectarea directă la furnizorii de email și trimiterea răspunsurilor nu sunt încă implementate."
+                  ? "Datele sunt păstrate în PostgreSQL. Robotul poate trimite mesaje prin API. Căsuțele email se configurează în meniul dedicat. Notele interne nu trimit răspunsuri prin email."
                   : "Datele sunt demonstrative și se resetează la reîncărcarea paginii. Conectarea conturilor de email va fi disponibilă în etapa următoare."}
               </div>
             </section>

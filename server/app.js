@@ -13,6 +13,7 @@ import {
   storeMessage,
   eligibleAgent,
 } from "./messages.js";
+import { registerWorkflows } from "./workflows.js";
 import { getContext } from "./context.js";
 import { createAiRunner } from "./ai-runner.js";
 import { createMailService, registerMailRoutes } from "./mail-service.js";
@@ -37,6 +38,17 @@ const agentSchema = z.object({
   password: z.string().min(12).max(200),
   skills: z.array(uuid).max(100).default([]),
   capacity: z.number().int().min(1).max(1000).default(20),
+  emmaCodes: z
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(100)
+        .transform((s) => s.toUpperCase()),
+    )
+    .max(200)
+    .default([]),
 });
 const ingestSchema = z.object({
   mailboxId: uuid,
@@ -48,6 +60,9 @@ const ingestSchema = z.object({
   body: z.string().max(200000),
   receivedAt: z.string().datetime({ offset: true }),
   priority: z.enum(["Scăzută", "Medie", "Ridicată"]).default("Medie"),
+  internetMessageId: z.string().max(1000).optional(),
+  inReplyTo: z.string().max(1000).optional(),
+  references: z.array(z.string().max(1000)).max(100).optional(),
   classification: z
     .object({
       skillId: uuid,
@@ -87,6 +102,9 @@ function present(m) {
     }).format(m.received_at),
     externalId: m.external_id,
     tagSource: m.tag_source,
+    taskKind: m.task_kind,
+    emmaCode: m.emma_code,
+    sourceMessageId: m.source_message_id,
   };
 }
 export function createApp(
@@ -95,12 +113,21 @@ export function createApp(
     production = false,
     appOrigin = "http://localhost:5173",
     trustProxyHops = 0,
+    additionalOrigins = [],
     ollama = createOllama(),
     aiRunner = createAiRunner(db, ollama),
     mailService = createMailService(db),
   } = {},
 ) {
   const app = express();
+  const allowedOrigins = new Set(
+    [appOrigin, ...additionalOrigins].map((value) => {
+      const url = new URL(value);
+      if (!["http:", "https:"].includes(url.protocol) || url.origin !== value)
+        throw new Error("Invalid APP_ORIGIN / APP_ORIGINS");
+      return value;
+    }),
+  );
   if (
     !Number.isInteger(trustProxyHops) ||
     trustProxyHops < 0 ||
@@ -130,7 +157,7 @@ export function createApp(
     if (
       !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
       req.headers.origin &&
-      req.headers.origin !== appOrigin
+      !allowedOrigins.has(req.headers.origin)
     )
       return next(fail(403, "Origine nepermisă"));
     next();
@@ -283,7 +310,7 @@ export function createApp(
   });
   app.get("/api/agents", human, async (req, res) => {
     const { rows } = await db.query(
-      `SELECT u.id,u.name,u.email,u.role,u.capacity,u.available,COALESCE((SELECT json_agg(s.name ORDER BY s.name) FROM agent_skills a JOIN skills s ON s.id=a.skill_id WHERE a.user_id=u.id),'[]') AS skills,(SELECT count(*)::int FROM messages m WHERE m.assigned_to=u.id AND m.status<>'Rezolvat') AS load FROM users u WHERE u.organization_id=$1 AND u.active=true ORDER BY u.name`,
+      `SELECT u.id,u.name,u.email,u.role,u.capacity,u.available,u.emma_codes AS "emmaCodes",COALESCE((SELECT json_agg(s.name ORDER BY s.name) FROM agent_skills a JOIN skills s ON s.id=a.skill_id WHERE a.user_id=u.id),'[]') AS skills,(SELECT count(*)::int FROM messages m WHERE m.assigned_to=u.id AND m.status<>'Rezolvat') AS load FROM users u WHERE u.organization_id=$1 AND u.active=true ORDER BY u.name`,
       [req.actor.org],
     );
     res.json(
@@ -315,6 +342,10 @@ export function createApp(
           b.capacity,
         ],
       );
+      await c.query("UPDATE users SET emma_codes=$1 WHERE id=$2", [
+        [...new Set(b.emmaCodes)],
+        id,
+      ]);
       for (const s of new Set(b.skills))
         await c.query("INSERT INTO agent_skills VALUES($1,$2,$3)", [
           req.actor.org,
@@ -329,6 +360,17 @@ export function createApp(
     const b = z
       .object({
         available: z.boolean().optional(),
+        emmaCodes: z
+          .array(
+            z
+              .string()
+              .trim()
+              .min(1)
+              .max(100)
+              .transform((s) => s.toUpperCase()),
+          )
+          .max(200)
+          .optional(),
         capacity: z.number().int().min(1).max(1000).optional(),
         skills: z.array(uuid).max(100).optional(),
       })
@@ -340,6 +382,11 @@ export function createApp(
         [req.actor.org, id],
       );
       if (!r.rowCount) throw fail(404, "Agent inexistent");
+      if (b.emmaCodes)
+        await c.query("UPDATE users SET emma_codes=$1 WHERE id=$2", [
+          [...new Set(b.emmaCodes)],
+          id,
+        ]);
       if (b.available !== undefined)
         await c.query("UPDATE users SET available=$1 WHERE id=$2", [
           b.available,
@@ -531,8 +578,8 @@ export function createApp(
     if (req.actor.type !== "robot")
       throw fail(403, "Folosește cheia robotului");
     const b = ingestSchema.parse(req.body);
-    const { id, duplicate } = await storeMessage(db, req.actor, b);
-    res.status(duplicate ? 200 : 201).json({ id, duplicate });
+    const { id, duplicate, updated } = await storeMessage(db, req.actor, b);
+    res.status(duplicate ? 200 : 201).json({ id, duplicate, updated });
   });
 
   app.get("/api/messages", human, async (req, res) => {
@@ -573,6 +620,7 @@ export function createApp(
       throw fail(404, "Mesaj inexistent");
     return m;
   }
+  registerWorkflows(app, { db, human, admin, accessible, ollama, aiRunner });
   app.get("/api/messages/:id/history", human, async (req, res) => {
     await accessible(db, req.actor, req.params.id);
     res.json(
@@ -731,13 +779,18 @@ export function createApp(
           );
         }
       }
+      if ("status" in b)
+        await c.query(
+          "UPDATE messages SET resolved_at=CASE WHEN status='Rezolvat' THEN COALESCE(resolved_at,now()) ELSE NULL END WHERE id=$1",
+          [m.id],
+        );
       if (reroute) {
         await c.query(
-          "UPDATE messages SET assigned_to=NULL,status='Nou',updated_at=now() WHERE id=$1",
+          "UPDATE messages SET assigned_to=NULL,status='Nou',resolved_at=NULL,updated_at=now() WHERE id=$1",
           [m.id],
         );
         const chosen = b.skillId
-          ? await eligibleAgent(c, req.actor.org, b.skillId)
+          ? await eligibleAgent(c, req.actor.org, b.skillId, m.emma_code)
           : null;
         if (chosen)
           await c.query("UPDATE messages SET assigned_to=$1 WHERE id=$2", [

@@ -10,10 +10,12 @@
     "api": "node --env-file-if-exists=.env server/index.js",
     "db:migrate": "node --env-file-if-exists=.env server/migrate.js",
     "db:bootstrap": "node --env-file-if-exists=.env server/bootstrap.js",
-    "test:api": "node --env-file-if-exists=.env --test --test-concurrency=1 server/test/*.test.js"
+    "test:api": "node --env-file-if-exists=.env --test --test-concurrency=1 server/test/*.test.js",
+    "start:local": "node --env-file-if-exists=.env server/local.js"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",
+    "exceljs": "^4.4.0",
     "express": "^5.3.0",
     "express-rate-limit": "^8.7.1",
     "helmet": "^8.3.0",
@@ -21,13 +23,20 @@
     "imapflow": "^2.5.4",
     "lucide-react": "^0.468.0",
     "mailparser": "^3.9.44",
+    "pdfjs-dist": "^6.4.299",
     "pg": "^8.23.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "yauzl": "^3.4.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
     "prettier": "^3.9.10",
     "vite": "^6.0.0"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
   }
 }

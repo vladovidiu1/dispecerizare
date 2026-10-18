@@ -22,9 +22,13 @@ const app = createApp(db, {
   mailService,
   production: process.env.NODE_ENV === "production",
   trustProxyHops: Number(process.env.TRUST_PROXY_HOPS || 0),
+  additionalOrigins: (process.env.APP_ORIGINS || " ")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
   appOrigin: process.env.APP_ORIGIN || "http://localhost:5173",
 });
-if (process.env.NODE_ENV === "production") {
+if (process.env.NODE_ENV === "production" || process.env.SERVE_UI === "true") {
   const dist = fileURLToPath(new URL("../dist", import.meta.url));
   app.use(express.static(dist));
   app.get("/{*path}", (req, res) => res.sendFile(dist + "/index.html"));

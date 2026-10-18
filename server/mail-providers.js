@@ -123,16 +123,20 @@ export async function pollDeviceCode(credentials, code) {
     throw mailError("MAIL_NETWORK");
   }
 }
-async function graphGet(path, token) {
+async function graphGet(path, token, limit) {
   const url = new URL(path, graphOrigin);
   if (url.origin !== graphOrigin || !url.pathname.startsWith("/v1.0/"))
     throw mailError("MAIL_CURSOR_INVALID");
-  return jsonFetch(url, {
-    headers: {
-      Authorization: "Bearer " + token,
-      Prefer: 'IdType="ImmutableId"',
+  return jsonFetch(
+    url,
+    {
+      headers: {
+        Authorization: "Bearer " + token,
+        Prefer: 'IdType="ImmutableId"',
+      },
     },
-  });
+    limit,
+  );
 }
 export async function verifyMicrosoft(credentials, token) {
   const me = await graphGet("/v1.0/me?$select=mail,userPrincipalName", token);
@@ -156,6 +160,7 @@ function normalizeGraph(m) {
   return {
     externalId: m.id,
     threadId: m.conversationId || null,
+    internetMessageId: m.internetMessageId || null,
     senderName: m.from?.emailAddress?.name || "Expeditor necunoscut",
     senderEmail: m.from?.emailAddress?.address || "unknown@local.invalid",
     subject: (m.subject || "(Fără subiect)").slice(0, 2000),
@@ -168,6 +173,64 @@ function normalizeGraph(m) {
     ).slice(0, 200000),
     receivedAt: m.receivedDateTime || new Date().toISOString(),
   };
+}
+async function graphMessage(m, credentials, token) {
+  const result = normalizeGraph(m);
+  if (!m.hasAttachments) return result;
+  try {
+    const data = await graphGet(
+      graphPath(credentials) +
+        "/messages/" +
+        encodeURIComponent(m.id) +
+        "/attachments",
+      token,
+      42_000_000,
+    );
+    let bytes = 0;
+    result.attachments = (data.value || []).slice(0, 50).map((a) => {
+      const size = Number(a.size) || 0;
+      const supported =
+        a["@odata.type"] === "#microsoft.graph.fileAttachment" &&
+        typeof a.contentBytes === "string";
+      const content =
+        supported && size <= 20_000_000
+          ? Buffer.from(a.contentBytes, "base64")
+          : null;
+      bytes += content?.length || 0;
+      return {
+        filename: a.name,
+        contentType: a.contentType,
+        size,
+        content: bytes <= 30_000_000 ? content : null,
+        unavailableReason: supported
+          ? "Atașament peste limita locală."
+          : "Atașament de tip link sau mesaj încorporat; consultă emailul original.",
+      };
+    });
+    if (data["@odata.nextLink"])
+      result.attachments.push({
+        filename: "Alte atașamente",
+        unavailableReason: "Prea multe atașamente; consultă emailul original.",
+      });
+  } catch (e) {
+    if (e.code === "MAIL_AUTH" || e.code === "MAIL_NETWORK") throw e;
+    result.attachments = [
+      {
+        filename: "Atașamente indisponibile",
+        unavailableReason:
+          "Atașamentele nu au putut fi preluate; consultă emailul original.",
+      },
+    ];
+  }
+  return result;
+}
+async function normalizeGraphBatch(values, credentials, token) {
+  const messages = [];
+  for (const m of values) {
+    if (!m["@removed"])
+      messages.push(await graphMessage(m, credentials, token));
+  }
+  return messages;
 }
 function normalizeAddress(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email || "")
@@ -213,7 +276,7 @@ async function imapMessage(client, box, uid, parseEmail) {
     { uid: true },
   );
   if (!meta) throw mailError("MAIL_MESSAGE_MISSING");
-  const tooLarge = meta.size > 2_000_000;
+  const tooLarge = meta.size > 30_000_000;
   let parsed;
   if (!tooLarge) {
     const raw = await client.fetchOne(
@@ -231,7 +294,16 @@ async function imapMessage(client, box, uid, parseEmail) {
   const from = parsed?.from?.value?.[0] || meta.envelope?.from?.[0] || {};
   return {
     externalId: `${box.uidValidity}:${uid}`,
-    threadId: parsed?.inReplyTo || parsed?.messageId || null,
+    threadId: null,
+    internetMessageId: parsed?.messageId || meta.envelope?.messageId || null,
+    inReplyTo: parsed?.inReplyTo || meta.envelope?.inReplyTo || null,
+    references: [].concat(parsed?.references || []),
+    attachments: (parsed?.attachments || []).map((a) => ({
+      filename: a.filename,
+      contentType: a.contentType,
+      size: a.size,
+      content: a.content,
+    })),
     senderName: (from.name || from.address || "Expeditor necunoscut").slice(
       0,
       200,
@@ -243,7 +315,7 @@ async function imapMessage(client, box, uid, parseEmail) {
       "(Fără subiect)"
     ).slice(0, 2000),
     body: tooLarge
-      ? "Mesaj mai mare de 2 MB. Verifică emailul original în căsuță; conținutul nu a fost importat automat."
+      ? "Mesaj mai mare de 30 MB. Verifică emailul original în căsuță; conținutul nu a fost importat automat."
       : (parsed?.text || "").slice(0, 200000),
     receivedAt: (
       parsed?.date ||
@@ -316,17 +388,20 @@ export function createMailProviders({
             graphPath(credentials) +
             "/mailFolders/inbox/messages/delta?" +
             new URLSearchParams({
-              $select: "id,conversationId,subject,body,from,receivedDateTime",
+              $select:
+                "id,conversationId,internetMessageId,hasAttachments,subject,body,from,receivedDateTime",
               $filter: "receivedDateTime ge " + since,
-              $top: "50",
+              $top: "5",
             });
         }
         const data = await graphGet(path, auth.accessToken);
         return {
           credentials: auth.credentials,
-          messages: (data.value || [])
-            .filter((m) => !m["@removed"])
-            .map(normalizeGraph),
+          messages: await normalizeGraphBatch(
+            data.value || [],
+            credentials,
+            auth.accessToken,
+          ),
           state: {
             ...connection.sync_state,
             cursor: data["@odata.nextLink"] || data["@odata.deltaLink"] || path,
@@ -357,7 +432,7 @@ export function createMailProviders({
         const uids = ((await client.search(query, { uid: true })) || [])
           .filter((n) => n > last)
           .sort((a, b) => a - b)
-          .slice(0, 50);
+          .slice(0, 5);
         const messages = [];
         for (const uid of uids)
           messages.push(await readMessage(client, box, uid));
@@ -381,7 +456,8 @@ export function createMailProviders({
             "/mailFolders/inbox/messages?" +
             new URLSearchParams({
               $search: '"' + phrase + '"',
-              $select: "id,conversationId,subject,body,from,receivedDateTime",
+              $select:
+                "id,conversationId,internetMessageId,hasAttachments,subject,body,from,receivedDateTime",
               $top: "20",
             }),
           auth.accessToken,
@@ -401,8 +477,14 @@ export function createMailProviders({
           .sort((a, b) => b - a)
           .slice(0, 20);
         const messages = [];
-        for (const uid of uids)
-          messages.push(await readMessage(client, box, uid));
+        for (const uid of uids) {
+          const { attachments, ...message } = await readMessage(
+            client,
+            box,
+            uid,
+          );
+          messages.push(message);
+        }
         return { credentials, messages };
       });
     },
@@ -412,14 +494,16 @@ export function createMailProviders({
         const messages = [];
         for (const id of externalIds)
           messages.push(
-            normalizeGraph(
+            await graphMessage(
               await graphGet(
                 graphPath(credentials) +
                   "/messages/" +
                   encodeURIComponent(id) +
-                  "?$select=id,conversationId,subject,body,from,receivedDateTime",
+                  "?$select=id,conversationId,internetMessageId,hasAttachments,subject,body,from,receivedDateTime",
                 auth.accessToken,
               ),
+              credentials,
+              auth.accessToken,
             ),
           );
         return { credentials: auth.credentials, messages };

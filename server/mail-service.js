@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { transaction } from "./db.js";
 import { storeMessage, event } from "./messages.js";
+import { createEmma } from "./emma.js";
 import { createVault } from "./vault.js";
 import {
   createMailProviders,
@@ -50,6 +51,7 @@ export function createMailService(
   } = {},
 ) {
   const flows = new Map();
+  const emma = createEmma(db);
   async function owned(id, org) {
     const row = (
       await db.query(
@@ -111,8 +113,21 @@ export function createMailService(
         b,
       );
       if (!result.duplicate) imported++;
+      const report = await emma.process(
+        row.organization_id,
+        result.id,
+        result.entryId,
+      );
+      if (report.matched) {
+        await db.query(
+          "UPDATE processing_jobs SET state='cancelled',lease_until=NULL WHERE message_id=$1 AND state IN ('pending','running','retry')",
+          [result.id],
+        );
+        continue;
+      }
+      if (result.updated) continue;
       await db.query(
-        "INSERT INTO processing_jobs(message_id,organization_id,state,last_error) SELECT id,organization_id,$2,$3 FROM messages WHERE id=$1 AND tag_source IS DISTINCT FROM 'human' ON CONFLICT(message_id) DO NOTHING",
+        "INSERT INTO processing_jobs(message_id,organization_id,state,last_error) SELECT id,organization_id,$2,$3 FROM messages WHERE id=$1 AND tag_source IS DISTINCT FROM 'human' AND status='Nou' AND assigned_to IS NULL AND task_kind='email' ON CONFLICT(message_id) DO NOTHING",
         [
           result.id,
           raw.skipAi ? "failed" : "pending",

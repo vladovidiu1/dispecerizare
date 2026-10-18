@@ -1,6 +1,11 @@
 import { transaction } from "./db.js";
 import { getContext } from "./context.js";
-import { event, requireSkill, classifyMessage } from "./messages.js";
+import {
+  event,
+  requireSkill,
+  classifyMessage,
+  distributeWaiting,
+} from "./messages.js";
 export function createAiRunner(db, ollama) {
   let busy = false;
   return {
@@ -68,6 +73,11 @@ export function createAiRunner(db, ollama) {
             [id, org],
           )
         ).rows[0];
+        if (current.body !== m.body)
+          throw Object.assign(
+            new Error("Email actualizat în timpul clasificării"),
+            { code: "AI_INPUT_CHANGED" },
+          );
         if (
           current.tag_source === "human" ||
           current.status !== "Nou" ||
@@ -113,6 +123,7 @@ export function startWorkers(
     polling = true;
     try {
       await mailService.pollDue();
+      await distributeWaiting(db);
     } catch (e) {
       console.error("Mail worker:", e.code || e.name);
     } finally {
@@ -150,9 +161,12 @@ export function startWorkers(
         } catch (e) {
           const code = e.code || "AI_PROCESSING";
           const retry =
-            ["OLLAMA_UNAVAILABLE", "OLLAMA_HTTP", "AI_SKILL_CONFIG"].includes(
-              code,
-            ) && job.attempts < 3;
+            [
+              "OLLAMA_UNAVAILABLE",
+              "OLLAMA_HTTP",
+              "AI_SKILL_CONFIG",
+              "AI_INPUT_CHANGED",
+            ].includes(code) && job.attempts < 3;
           await db.query(
             "UPDATE processing_jobs SET state=$1,lease_until=NULL,last_error=$2,next_attempt_at=now()+make_interval(secs=>$3),updated_at=now() WHERE message_id=$4 AND state='running'",
             [

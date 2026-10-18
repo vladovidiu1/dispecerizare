@@ -11,3 +11,18 @@ export async function api(path, options = {}) {
   if (!r.ok) throw new Error(data.error || "Conexiunea a eșuat");
   return data;
 }
+
+export async function upload(path, file, contentType) {
+  const response = await fetch("/api" + path, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": contentType,
+      "X-Filename": encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || "Încărcarea a eșuat");
+  return data;
+}

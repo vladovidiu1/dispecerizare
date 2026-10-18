@@ -90,3 +90,54 @@ test("refuses nonlocal inference endpoints and does not silently truncate a larg
     );
   });
 });
+
+test("ITL guidance accepts only quoted evidence from the supplied local document chunks", async () =>
+  fixture(async (ai, get, set) => {
+    const sources = [
+        {
+          id: skillId,
+          title: "Resetare parola",
+          documentId: skillId,
+          page: 2,
+          body: "Verifica identitatea utilizatorului. Deschide ecranul de resetare parola.",
+        },
+      ],
+      input = { subject: "Resetare parola", body: "Nu am acces", sources };
+    set({
+      steps: [
+        {
+          text: "Verifică identitatea.",
+          sourceId: skillId,
+          quote: "Verifica identitatea utilizatorului.",
+        },
+      ],
+    });
+    const result = await ai.guide(input);
+    assert.equal(result.steps.length, 1);
+    assert.equal(get().think, false);
+    assert.equal(get().options.num_ctx, 4096);
+    for (const steps of [
+      [
+        {
+          text: "Inventat",
+          sourceId: skillId,
+          quote: "Acest citat nu apare in document",
+        },
+      ],
+      [
+        {
+          text: "Inventat",
+          sourceId: "other-id",
+          quote: "Verifica identitatea utilizatorului.",
+        },
+      ],
+    ]) {
+      set({ steps });
+      await assert.rejects(
+        () => ai.guide(input),
+        (e) => e.code === "OLLAMA_INVALID_OUTPUT",
+      );
+    }
+    set({ steps: [] });
+    assert.deepEqual((await ai.guide(input)).steps, []);
+  }));

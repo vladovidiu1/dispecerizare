@@ -15,7 +15,7 @@ Toate rutele sunt sub `/api`. JSON UTF-8, identificatori UUID. Cookie-urile util
 | POST /examples                   | Admin: `{skillId,subject,body}`                                                                         |
 | GET /agents                      | Utilizator: agenți, competențe, disponibilitate, capacitate, încărcare                                  |
 | POST /agents                     | Admin: `{name,email,password,skills:[UUID],capacity:20}`; parola ≥12 caractere                          |
-| PATCH /agents/:id                | Admin: oricare dintre `{available,capacity,skills:[UUID]}`                                              |
+| PATCH /agents/:id                | Admin: oricare dintre `{available,capacity,skills:[UUID],emmaCodes:[string]}`                           |
 | GET /mailboxes                   | Admin: adrese sursă `{id,provider,address}`                                                             |
 | POST /mailboxes                  | Admin: `{provider:"outlook",address:"shared@example.com"}`; provider este text liber                    |
 | POST /keys                       | Admin: `{name:"Robot Ollama"}` → `{id,token}`; tokenul se returnează o singură dată                     |
@@ -94,7 +94,7 @@ Sursa mesajelor de test este o adresă internă fictivă cu provider `manual-tes
 | POST /mail-connections/:id/authorize  | Outlook: returnează `{flowId,userCode,verificationUri,interval,expiresIn}` pentru device login                                                                                                    |
 | POST /mail-authorizations/:id/poll    | `{pending,interval}` sau `{pending:false,ok:true,account}`; flow legat de firmă, temporar, cu frecvența impusă de furnizor                                                                        |
 | PUT /mail-connections/:id/password    | Gmail/Yahoo: `{appPassword}`; verifică înainte de înlocuire                                                                                                                                       |
-| POST /mail-connections/:id/sync       | Un lot de maximum 50 mesaje; `{imported,read}`, checkpoint numai după salvarea mesajelor și joburilor                                                                                             |
+| POST /mail-connections/:id/sync       | Un lot de până la 5 mesaje solicitat furnizorului; `{imported,read}`, checkpoint numai după salvarea mesajelor și joburilor                                                                       |
 | POST /mail-connections/:id/search     | `{query}` (2–200 caractere); până la 20 rezultate/preview, fără import automat                                                                                                                    |
 | POST /mail-connections/:id/import     | `{externalIds:[...]}` (1–20 ID-uri); citește din sursa configurată, importă și pune în coadă fără duplicate                                                                                       |
 | POST /mail-connections/:id/disconnect | Oprește monitorizarea și elimină credențialele locale; taskurile rămân                                                                                                                            |
@@ -109,3 +109,20 @@ Conectorii nu acceptă hostname-uri IMAP arbitrare, redirecționări Graph exter
 O conexiune activă răspunde 409 pentru start-now: oprește-o explicit înainte de a elimina backlogul neimportat prin alegerea unui checkpoint nou. O schimbare UIDVALIDITY în modul future nu revine la o căutare istorică, ci răspunde `MAIL_UIDVALIDITY_CHANGED`. Snapshotul necesită UIDNEXT valid; în lipsa lui nu activează monitorizarea.
 
 PATCH `{enabled:true}` păstrează comportamentul anterior: reia checkpointul existent sau, în lipsa lui, importă istoricul configurat. Interfața prezintă aceste acțiuni separat. Mesajele deja importate și joburile lor nu sunt șterse/anulate de reinițializarea checkpointului.
+
+## Conversații, atașamente, ITL, EMMA și indicatori
+
+Migrarea 003 este necesară. Vezi [workflow-uri locale](local-workflows.md) pentru limite și semantica importului.
+
+- `GET /messages/:id/conversation`: utilizator cu acces la task; `{entries:[{id,senderName,senderEmail,subject,body,receivedAt,attachments:[{id,filename,size,contentType,unavailableReason}]}]}`.
+- `GET /attachments/:id/download`: acces verificat din nou la task, răspuns binar ca descărcare; fără conținut HTML executat în aplicație.
+- Ingestia acceptă opțional `internetMessageId,inReplyTo,references:[string]`; răspunde și `updated`. `threadId` este identificator de conversație al furnizorului. Gruparea are domeniu mailbox și nu folosește subiectul.
+- `GET /knowledge`: admin; `{items,folder}`. `POST /knowledge/pdf`: admin, corp binar `application/pdf`, header `X-Filename` URL-encoded, maximum 20 MB. `POST /knowledge/scan`: admin, indexare director privat `itl/<organization UUID>`. `DELETE /knowledge/:id`: admin, eliminare din SQL. `GET /knowledge/:id/pdf`: utilizator al organizației.
+- `GET /messages/:id/itl`: utilizator cu acces la task, candidați `{sources:[{id,documentId,title,page}]}`. `POST` pe aceeași rută generează local `{steps:[{text,sourceId,quote}],sources,model}`; citatele sunt verificate față de fragmentele furnizate. Inferența folosește lockul comun Qwen.
+- `GET /emma/rules`: admin. `POST`: `{senderEmail,subjectContains,sheetName,headerRow,codeColumn,skillId,enabled}`. `PATCH /emma/rules/:id`: `{enabled}`. `DELETE` pe aceeași rută elimină regula.
+- `POST /emma/preview`: admin, corp XLSX `application/octet-stream`, maximum 10 MB; `{sheets:[{name,rows,preview:[{row,cells:[{column,text}]}]}]}`. Nu persistă fișierul și nu creează taskuri.
+- `GET /emma/imports`: admin, ultimele 50 rezultate cu fișier, task părinte, număr creat/ignorat și eroare. `POST /messages/:id/emma`: admin, aplică regulile active pe atașamentele deja importate ale taskului; reaplicarea importurilor încheiate nu dublează taskuri.
+- `POST/PATCH /agents`: `emmaCodes:[string]`, maximum 200 coduri, fiecare maximum 100 caractere; majuscule și duplicate eliminate. GET /agents le expune drept emmaCodes.
+- `GET /dashboard`: utilizator, scope admin=firmă/agent=taskuri proprii; `{summary,daily,categories,agents}`; agregări din toate taskurile, independent de paginare.
+
+Fișierele se păstrează în PostgreSQL, pe server. Limitele raw upload sunt specifice rutelor, nu măresc limita JSON a întregului API. Cheile roboților nu pot descărca documente/atașamente sau accesa aceste ecrane. Originile de browser sunt validate față de APP_ORIGIN și lista exactă APP_ORIGINS, fără wildcarduri.

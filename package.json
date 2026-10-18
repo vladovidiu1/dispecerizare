@@ -11,7 +11,12 @@
     "db:migrate": "node --env-file-if-exists=.env server/migrate.js",
     "db:bootstrap": "node --env-file-if-exists=.env server/bootstrap.js",
     "test:api": "node --env-file-if-exists=.env --test --test-concurrency=1 server/test/*.test.js",
-    "start:local": "node --env-file-if-exists=.env server/local.js"
+    "start:local": "node --env-file-if-exists=.env server/local.js",
+    "start:https": "node --env-file-if-exists=.env --env-file=.relay/https.env server/https.js",
+    "proxy:https": "node --env-file=.relay/https.env scripts/https-proxy.js",
+    "check:https": "node --env-file=.relay/https.env scripts/https-proxy.js validate",
+    "build:https": "node --env-file-if-exists=.env --env-file=.relay/https.env scripts/build-https.js",
+    "test:https": "node --env-file-if-exists=.env scripts/test-https.mjs"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

@@ -804,3 +804,165 @@ test("mail polling recovers a committed root email without a job and never recla
     "done",
   );
 });
+
+test("admin can disable/reactivate an account, revoke sessions, and cannot disable self or another firm", async () => {
+  assert.equal(
+    (await request("/security/users", { cookie: agentCookie })).status,
+    403,
+  );
+  const users = await request("/security/users");
+  assert.ok(users.data.some((u) => u.id === agent && u.active));
+  assert.equal(
+    (
+      await request("/agents/" + agent, {
+        method: "PATCH",
+        body: { active: false },
+      })
+    ).status,
+    204,
+  );
+  assert.equal(
+    (await request("/auth/me", { cookie: agentCookie })).status,
+    401,
+  );
+  assert.equal(
+    (await db.query("SELECT 1 FROM sessions WHERE user_id=$1", [agent]))
+      .rowCount,
+    0,
+  );
+  assert.equal(
+    (
+      await request("/auth/login", {
+        cookie: null,
+        method: "POST",
+        body: {
+          organizationId: org,
+          email: agent + "@example.test",
+          password: "fixture-password-1234",
+        },
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await request("/agents/" + admin, {
+        method: "PATCH",
+        body: { active: false },
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await request("/agents/" + outsider, {
+        method: "PATCH",
+        body: { active: false },
+      })
+    ).status,
+    404,
+  );
+  assert.equal(
+    (
+      await request("/agents/" + agent, {
+        method: "PATCH",
+        body: { active: true },
+      })
+    ).status,
+    204,
+  );
+  const login = await request("/auth/login", {
+    cookie: null,
+    method: "POST",
+    body: {
+      organizationId: org,
+      email: agent + "@example.test",
+      password: "fixture-password-1234",
+    },
+  });
+  assert.equal(login.status, 200);
+  agentCookie = login.cookie;
+});
+test("password changes require the current password and revoke every session before accepting the new password", async () => {
+  const original = "fixture-password-1234",
+    fresh = "new-fixture-password-4567",
+    loginBody = {
+      organizationId: org,
+      email: agent + "@example.test",
+      password: original,
+    };
+  const secondSession = await request("/auth/login", {
+    method: "POST",
+    cookie: null,
+    body: loginBody,
+  });
+  assert.equal(secondSession.status, 200);
+  assert.equal(
+    (
+      await request("/auth/password", {
+        cookie: agentCookie,
+        method: "POST",
+        body: { currentPassword: "wrong", newPassword: fresh },
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await request("/auth/password", {
+        cookie: agentCookie,
+        method: "POST",
+        body: { currentPassword: original, newPassword: "short" },
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await request("/auth/password", {
+        cookie: agentCookie,
+        method: "POST",
+        body: { currentPassword: original, newPassword: original },
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await request("/auth/password", {
+        cookie: agentCookie,
+        method: "POST",
+        body: { currentPassword: original, newPassword: fresh },
+      })
+    ).status,
+    204,
+  );
+  assert.equal(
+    (await request("/auth/me", { cookie: agentCookie })).status,
+    401,
+  );
+  assert.equal(
+    (await request("/auth/me", { cookie: secondSession.cookie })).status,
+    401,
+  );
+  assert.equal(
+    (
+      await request("/auth/login", {
+        cookie: null,
+        method: "POST",
+        body: loginBody,
+      })
+    ).status,
+    401,
+  );
+  assert.equal(
+    (
+      await request("/auth/login", {
+        cookie: null,
+        method: "POST",
+        body: { ...loginBody, password: fresh },
+      })
+    ).status,
+    200,
+  );
+});

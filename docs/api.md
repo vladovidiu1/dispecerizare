@@ -126,3 +126,11 @@ Migrarea 003 este necesară. Vezi [workflow-uri locale](local-workflows.md) pent
 - `GET /dashboard`: utilizator, scope admin=firmă/agent=taskuri proprii; `{summary,daily,categories,agents}`; agregări din toate taskurile, independent de paginare.
 
 Fișierele se păstrează în PostgreSQL, pe server. Limitele raw upload sunt specifice rutelor, nu măresc limita JSON a întregului API. Cheile roboților nu pot descărca documente/atașamente sau accesa aceste ecrane. Originile de browser sunt validate față de APP_ORIGIN și lista exactă APP_ORIGINS, fără wildcarduri.
+
+## Conturi și profil HTTPS
+
+- `POST /auth/password`: utilizator autentificat, `{currentPassword,newPassword}`; parola nouă diferită, 12–200 caractere. Verifică parola curentă, actualizează hashul și invalidează toate sesiunile, apoi răspunde 204 și șterge cookie-ul curent. Nu este resetare de parolă uitată.
+- `GET /security/users`: admin, utilizatorii firmei inclusiv dezactivați, `{id,name,email,role,active}` fără hashuri/sesiuni.
+- `PATCH /agents/:id`: admin, acceptă și `{active:boolean}`. Dezactivarea șterge sesiunile; taskurile nu sunt mutate automat. Propriul cont și ultimul admin activ sunt protejate.
+
+În producție, toate originile configurate trebuie să fie HTTPS, iar cererile fără transport HTTPS recunoscut sunt refuzate, exceptând health-ul local. Profilul `start:https` impune HOST=127.0.0.1 și un singur proxy local; vezi [configurarea HTTPS](corporate-https.md). Antetele forwarded dintr-o cerere externă sunt înlocuite de proxy înainte de backend. Nu expune backendul direct și nu seta un număr arbitrar de proxy-uri de încredere.

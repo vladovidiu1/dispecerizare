@@ -496,19 +496,25 @@ test("unavailable agents, low confidence with free capacity, and source-specific
   );
 });
 
-test("production sessions use Secure HttpOnly SameSite cookies", async () => {
+test("production requires HTTPS and sessions use Secure HttpOnly SameSite cookies", async () => {
   const productionServer = createApp(db, {
     production: true,
+    trustProxyHops: 1,
     appOrigin: "https://relay.example.test",
   }).listen(0, "127.0.0.1");
   await new Promise((r) => productionServer.once("listening", r));
   try {
+    const direct = await fetch(
+      "http://127.0.0.1:" + productionServer.address().port + "/api/auth/me",
+    );
+    assert.equal(direct.status, 403);
     const r = await fetch(
       "http://127.0.0.1:" + productionServer.address().port + "/api/auth/login",
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          "X-Forwarded-Proto": "https",
           Origin: "https://relay.example.test",
         },
         body: JSON.stringify({

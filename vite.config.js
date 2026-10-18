@@ -8,7 +8,13 @@ export default defineConfig(({ mode }) => {
     server: {
       allowedHosts,
       fs: {
-        deny: [".env", ".env.*", "*.{crt,pem}", "**/.git/**", "**/.relay/**"],
+        deny: [
+          ".env",
+          ".env.*",
+          "**/*.{crt,pem,key,pfx,p12}",
+          "**/.git/**",
+          "**/.relay/**",
+        ],
       },
       proxy: { "/api": env.API_PROXY_TARGET || "http://127.0.0.1:3001" },
     },

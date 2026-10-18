@@ -34,6 +34,7 @@ import Mailboxes from "./Mailboxes";
 import WorkflowSettings from "./WorkflowSettings";
 import TaskResources from "./TaskResources";
 import Dashboard from "./Dashboard";
+import SecuritySettings from "./SecuritySettings";
 const initial = [
   {
     id: 1048,
@@ -1393,6 +1394,19 @@ function App() {
                   : "Momentan construim interfața. Distribuirea automată va fi implementată în etapa următoare."}
               </div>
             </section>
+          ) : page === "settings" && backendEnabled ? (
+            <SecuritySettings
+              user={user}
+              notify={notify}
+              onSignedOut={() => {
+                setUser(null);
+                setMessages([]);
+                setTeam([]);
+                setSelected(null);
+                setPage("overview");
+                setOffset(0);
+              }}
+            />
           ) : page === "settings" ? (
             <section className="panel settings">
               <h1>Setările spațiului de lucru</h1>

@@ -8,3 +8,9 @@ dist/
 __pycache__/
 *.pyc
 .relay/
+
+# Private TLS material must never be committed.
+*.key
+*.pem
+*.pfx
+*.p12

@@ -123,7 +123,11 @@ export function createApp(
   const allowedOrigins = new Set(
     [appOrigin, ...additionalOrigins].map((value) => {
       const url = new URL(value);
-      if (!["http:", "https:"].includes(url.protocol) || url.origin !== value)
+      if (
+        !["http:", "https:"].includes(url.protocol) ||
+        url.origin !== value ||
+        (production && url.protocol !== "https:")
+      )
         throw new Error("Invalid APP_ORIGIN / APP_ORIGINS");
       return value;
     }),
@@ -136,7 +140,23 @@ export function createApp(
     throw new Error("Invalid TRUST_PROXY_HOPS");
   app.set("trust proxy", trustProxyHops);
   app.disable("x-powered-by");
-  app.use(production ? helmet() : helmet({ contentSecurityPolicy: false }));
+  app.use(
+    production
+      ? helmet({
+          contentSecurityPolicy: {
+            directives: {
+              "script-src": ["'self'"],
+              "frame-ancestors": ["'none'"],
+              "object-src": ["'none'"],
+            },
+          },
+          strictTransportSecurity: {
+            maxAge: 31536000,
+            includeSubDomains: false,
+          },
+        })
+      : helmet({ contentSecurityPolicy: false }),
+  );
   app.use(express.json({ limit: "300kb" }));
   app.use(cookieParser());
   app.use(
@@ -148,6 +168,11 @@ export function createApp(
       legacyHeaders: false,
     }),
   );
+  app.use((req, res, next) => {
+    if (production && !req.secure && req.path !== "/api/health")
+      return res.status(403).json({ error: "HTTPS necesar" });
+    next();
+  });
   app.get("/api/health", async (req, res) => {
     await db.query("SELECT 1");
     res.json({ status: "ok" });
@@ -173,21 +198,29 @@ export function createApp(
           password: z.string().min(1).max(200),
         })
         .parse(req.body);
-      const {
-        rows: [user],
-      } = await db.query(
-        "SELECT * FROM users WHERE organization_id=$1 AND email=$2 AND active=true",
-        [b.organizationId, b.email],
-      );
-      // Perform the same password derivation even when the account does not exist.
-      const valid = checkPassword(b.password, user?.password_hash || dummyHash);
-      if (!user || !valid) throw fail(401, "Date de autentificare incorecte");
       const t = token();
-      await db.query("DELETE FROM sessions WHERE expires_at<now()");
-      await db.query(
-        "INSERT INTO sessions VALUES($1,$2,now()+interval '8 hours')",
-        [hashToken(t), user.id],
-      );
+      const user = await transaction(db, async (c) => {
+        const user = (
+          await c.query(
+            "SELECT * FROM users WHERE organization_id=$1 AND email=$2 AND active=true FOR UPDATE",
+            [b.organizationId, b.email],
+          )
+        ).rows[0];
+        const valid = checkPassword(
+          b.password,
+          user?.password_hash || dummyHash,
+        );
+        if (!user || !valid) throw fail(401, "Date de autentificare incorecte");
+        await c.query(
+          "DELETE FROM sessions WHERE user_id=$1 AND expires_at<now()",
+          [user.id],
+        );
+        await c.query(
+          "INSERT INTO sessions VALUES($1,$2,now()+interval '8 hours')",
+          [hashToken(t), user.id],
+        );
+        return user;
+      });
       res
         .cookie("relay_session", t, {
           httpOnly: true,
@@ -255,6 +288,61 @@ export function createApp(
       .status(204)
       .end();
   });
+  app.post(
+    "/api/auth/password",
+    human,
+    rateLimit({
+      windowMs: 900000,
+      limit: 10,
+      keyGenerator: (req) => req.actor.id,
+      legacyHeaders: false,
+    }),
+    async (req, res) => {
+      const b = z
+        .object({
+          currentPassword: z.string().min(1).max(200),
+          newPassword: z.string().min(12).max(200),
+        })
+        .strict()
+        .parse(req.body);
+      if (b.currentPassword === b.newPassword)
+        throw fail(400, "Alege o parolă diferită de cea curentă");
+      await transaction(db, async (c) => {
+        const user = (
+          await c.query(
+            "SELECT password_hash FROM users WHERE id=$1 AND active=true FOR UPDATE",
+            [req.actor.id],
+          )
+        ).rows[0];
+        if (!user || !checkPassword(b.currentPassword, user.password_hash))
+          throw fail(401, "Parola curentă este incorectă");
+        await c.query("UPDATE users SET password_hash=$1 WHERE id=$2", [
+          hashPassword(b.newPassword),
+          req.actor.id,
+        ]);
+        await c.query("DELETE FROM sessions WHERE user_id=$1", [req.actor.id]);
+      });
+      res
+        .clearCookie("relay_session", {
+          path: "/api",
+          sameSite: "strict",
+          secure: production,
+          httpOnly: true,
+        })
+        .status(204)
+        .end();
+    },
+  );
+  app.get("/api/security/users", admin, async (req, res) =>
+    res.json(
+      (
+        await db.query(
+          "SELECT id,name,email,role,active FROM users WHERE organization_id=$1 ORDER BY name",
+          [req.actor.org],
+        )
+      ).rows,
+    ),
+  );
   app.get("/api/skills", async (req, res) =>
     res.json(
       (
@@ -360,6 +448,7 @@ export function createApp(
     const b = z
       .object({
         available: z.boolean().optional(),
+        active: z.boolean().optional(),
         emmaCodes: z
           .array(
             z
@@ -377,11 +466,35 @@ export function createApp(
       .strict()
       .parse(req.body);
     await transaction(db, async (c) => {
+      await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
+        req.actor.org,
+      ]);
       const r = await c.query(
-        "SELECT id FROM users WHERE organization_id=$1 AND id=$2 FOR UPDATE",
+        "SELECT id,role FROM users WHERE organization_id=$1 AND id=$2 FOR UPDATE",
         [req.actor.org, id],
       );
       if (!r.rowCount) throw fail(404, "Agent inexistent");
+      if (b.active !== undefined) {
+        if (!b.active && id === req.actor.id)
+          throw fail(400, "Nu îți poți dezactiva propriul cont");
+        if (
+          !b.active &&
+          r.rows[0].role === "admin" &&
+          (
+            await c.query(
+              "SELECT count(*)::int AS n FROM users WHERE organization_id=$1 AND role='admin' AND active=true",
+              [req.actor.org],
+            )
+          ).rows[0].n <= 1
+        )
+          throw fail(
+            400,
+            "Organizația trebuie să păstreze un administrator activ",
+          );
+        await c.query("UPDATE users SET active=$1 WHERE id=$2", [b.active, id]);
+        if (!b.active)
+          await c.query("DELETE FROM sessions WHERE user_id=$1", [id]);
+      }
       if (b.emmaCodes)
         await c.query("UPDATE users SET emma_codes=$1 WHERE id=$2", [
           [...new Set(b.emmaCodes)],

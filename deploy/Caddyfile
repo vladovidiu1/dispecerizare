@@ -1,0 +1,30 @@
+{
+	admin off
+	auto_https disable_redirects
+	servers {
+		protocols h1 h2
+		timeouts {
+			read_header 10s
+			read_body 60s
+			idle 2m
+		}
+	}
+}
+
+{$RELAY_HTTPS_SITE} {
+	tls "{$RELAY_TLS_CERT_FILE}" "{$RELAY_TLS_KEY_FILE}"
+
+	request_body {
+		max_size 21MB
+	}
+
+	reverse_proxy 127.0.0.1:{$PORT:3001} {
+		header_up -Forwarded
+		header_up X-Forwarded-For {remote_host}
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-Host {host}
+		transport http {
+			response_header_timeout 360s
+		}
+	}
+}

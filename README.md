@@ -88,3 +88,9 @@ Testele pentru conectori folosesc Microsoft/IMAP simulate, nu conturi reale. Aut
 ## Funcții locale și accesul echipei
 
 Vezi [ghidul Windows și workflow-uri locale](docs/local-workflows.md) pentru acces prin IP/nume intern fără domeniu cumpărat, `start:local`, conversații actualizate pe același task, descărcarea atașamentelor, PDF-uri ITL cu pași din Qwen și distribuirea rândurilor Excel EMMA după codurile agenților. Documentele, atașamentele și căutarea rămân locale; conexiunile la furnizorii de email necesită Internet.
+
+## HTTPS intern și evaluare corporativă
+
+Profilul HTTPS folosește Caddy 2 cu certificat și DNS intern aprobate de IT; backendul rămâne pe loopback și refuză HTTP în producție. Vezi [ghidul pentru Cloud PC, DNS dinamic, certificate și Zscaler](docs/corporate-https.md). Comenzile `build:https`, `check:https`, `start:https` și `proxy:https` folosesc fișierul privat `.relay/https.env`, pregătit din `deploy/https.env.example`. Nu este furnizat un certificat al companiei și nu este modificată infrastructura clientului.
+
+Setările includ schimbarea parolei proprii cu invalidarea sesiunilor și dezactivarea/reactivarea conturilor de către admin. SSO/MFA, antivirus și serviciile Windows nu sunt încă integrate; HTTPS nu reprezintă certificare sau aprobare Cyber Security.

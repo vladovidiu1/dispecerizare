@@ -68,3 +68,11 @@ Client Python fără dependențe externe: `scripts/relay_client.py`, cu `RELAY_A
 Erori JSON `{error,issues?}`: 400 validare, 401 autentificare, 403 drepturi/origine, 404 resursă inexistentă sau inaccesibilă, 409 dublură configurare, 413 payload prea mare, 429 limită de cereri, 500 eroare internă. API-ul limitează cererile la 300/minut/IP și autentificările la 20/15 minute/IP. Payload maxim 300 KB; text mesaj maxim 200.000 caractere. Interogările sunt parametrizate; HTML-ul nu este randat în interfață.
 
 Istoricul este append-only prin API, nu un jurnal criptografic sau protejat împotriva unui administrator al bazei de date.
+
+## Test AI local (administrator)
+
+`GET /ai/status` → `{reachable,installed,model}`. Verifică `/api/tags` al Ollama local; nu descarcă și nu pornește modelul.
+
+`POST /ai/test` cu `{requestId:UUID,senderName,senderEmail,subject,body}` creează un task și apelează modelul local. `body` are maximum 6000 caractere. Prima cerere răspunde cu 201 și `{id,duplicate:false,message,classification,warning}`. Clasificarea validată conține competența, încrederea, motivul, modelul și versiunea promptului. Un eșec de inferență păstrează taskul nealocat și returnează `classification:null` și `warning`, cu eveniment `classification_failed`. Repetarea aceluiași `requestId` în aceeași firmă răspunde 200 `{id,duplicate:true,classification:null,notice}` fără reluarea inferenței. În lipsa competențelor, 400; dacă există alt test în lucru în același proces, 409 înainte de salvare. Datele provin numai din firma administratorului autentificat. Cheile robotului și agenții nu pot apela aceste rute.
+
+Sursa mesajelor de test este o adresă internă fictivă cu provider `manual-test`; nu reprezintă o căsuță de email conectată. Notele și taskurile de test sunt date persistente, vizibile în lista de mesaje.

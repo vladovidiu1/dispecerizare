@@ -531,3 +531,103 @@ test("production sessions use Secure HttpOnly SameSite cookies", async () => {
     await new Promise((r) => productionServer.close(r));
   }
 });
+
+test("manual local-AI flow uses firm configuration, persists failures, deduplicates and restricts access", async () => {
+  let calls = 0,
+    captured,
+    mode = "success",
+    release;
+  const ai = {
+    status: async () => ({
+      reachable: true,
+      installed: true,
+      model: "fixture:8b",
+    }),
+    classify: async (input) => {
+      calls++;
+      captured = input;
+      if (mode === "wait")
+        await new Promise((r) => {
+          release = r;
+        });
+      if (mode === "fail")
+        throw Object.assign(new Error("private failure"), {
+          code: "OLLAMA_UNAVAILABLE",
+        });
+      return {
+        skillId: skill,
+        confidence: 0.95,
+        model: "fixture:8b",
+        promptVersion: "fixture-v1",
+        reason: "Facturare",
+      };
+    },
+  };
+  const s = createApp(db, { ollama: ai }).listen(0, "127.0.0.1");
+  await new Promise((r) => s.once("listening", r));
+  const call = async (path, body, cookie = adminCookie) => {
+    const r = await fetch(
+      "http://127.0.0.1:" + s.address().port + "/api" + path,
+      {
+        method: body ? "POST" : "GET",
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      },
+    );
+    return { status: r.status, data: await r.json() };
+  };
+  const data = () => ({
+    requestId: randomUUID(),
+    senderName: "Client",
+    senderEmail: "client@example.test",
+    subject: "Factură",
+    body: "Detalii factură",
+  });
+  try {
+    await db.query(
+      "UPDATE messages SET status='Rezolvat' WHERE organization_id=$1",
+      [org],
+    );
+    assert.equal((await call("/ai/status")).data.installed, true);
+    const input = data(),
+      success = await call("/ai/test", input);
+    assert.equal(success.status, 201);
+    assert.equal(success.data.message.agentId, agent);
+    assert.equal(captured.skills.length, 1);
+    assert.equal(captured.skills[0].id, skill);
+    assert.ok(captured.examples.length > 0);
+    assert.equal((await call("/ai/test", input)).data.duplicate, true);
+    assert.equal(calls, 1);
+    mode = "fail";
+    const failure = await call("/ai/test", data());
+    assert.equal(failure.status, 201);
+    assert.equal(failure.data.message.agentId, null);
+    assert.ok(failure.data.warning);
+    const events = await db.query(
+      "SELECT type,data FROM message_events WHERE message_id=$1 ORDER BY id",
+      [failure.data.id],
+    );
+    assert.equal(events.rows.at(-1).type, "classification_failed");
+    assert.equal(events.rows.at(-1).data.reason, "OLLAMA_UNAVAILABLE");
+    const freshCookie = (
+      await request("/auth/login", {
+        method: "POST",
+        body: { organizationId: org, email: "agent@example.test", password },
+      })
+    ).cookie;
+    assert.equal((await call("/ai/test", data(), freshCookie)).status, 403);
+    assert.equal((await call("/ai/test", data(), otherCookie)).status, 201);
+    assert.ok(captured.skills.every((s) => s.id !== skill));
+    mode = "wait";
+    const pending = call("/ai/test", data());
+    for (let i = 0; i < 100 && !release; i++)
+      await new Promise((r) => setTimeout(r, 10));
+    assert.ok(release);
+    assert.equal((await call("/ai/test", data())).status, 409);
+    release();
+    assert.equal((await pending).status, 201);
+  } finally {
+    release?.();
+    await new Promise((r) => s.close(r));
+  }
+});

@@ -1453,3 +1453,94 @@ legend {
 .history small {
   line-height: 1.8;
 }
+.ai-status {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  padding: 20px;
+  margin-bottom: 22px;
+}
+.ai-status strong {
+  font-size: 12px;
+}
+.ai-status p,
+.ai-form > p {
+  font-size: 11px;
+  color: #94869f;
+  line-height: 1.8;
+}
+.ai-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  gap: 20px;
+  align-items: start;
+}
+.ai-form {
+  padding: 24px;
+}
+.ai-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 15px 0;
+  font-size: 11px;
+  color: #887499;
+}
+.ai-form input,
+.ai-form textarea {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #e7dfef;
+  border-radius: 7px;
+  color: #53435f;
+  background: white;
+}
+.ai-form textarea {
+  resize: vertical;
+}
+.ai-form fieldset {
+  padding: 0;
+}
+.ai-result {
+  padding: 18px;
+  margin-top: 20px;
+  background: #f6f1fc;
+  border-radius: 8px;
+  line-height: 1.8;
+}
+.ai-result p {
+  font-size: 12px;
+}
+.ai-result small {
+  display: block;
+  color: #927fa3;
+}
+.ai-result button {
+  margin: 15px 12px 0 0;
+}
+.example-list > div {
+  border-top: 1px solid #eee8f4;
+  margin-top: 20px;
+  padding-top: 15px;
+  font-size: 11px;
+}
+.example-list span {
+  display: block;
+  color: #9c7dc0;
+  margin-top: 5px;
+}
+.example-list p {
+  color: #95869f;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1000px) {
+  .ai-grid {
+    grid-template-columns: 1fr;
+  }
+  .ai-status {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

@@ -5,6 +5,7 @@ import { rateLimit } from "express-rate-limit";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { transaction } from "./db.js";
+import { createOllama } from "./ollama.js";
 import { checkPassword, hashPassword, hashToken, token } from "./security.js";
 const uuid = z.string().uuid(),
   text = z.string().trim().min(1),
@@ -89,6 +90,7 @@ export function createApp(
     production = false,
     appOrigin = "http://localhost:5173",
     trustProxyHops = 0,
+    ollama = createOllama(),
   } = {},
 ) {
   const app = express();
@@ -398,105 +400,134 @@ export function createApp(
     if (!r.rowCount) throw fail(404, "Cheie inexistentă");
     res.status(204).end();
   });
+  let aiBusy = false;
+  app.get("/api/ai/status", admin, async (req, res) => {
+    res.json(await ollama.status());
+  });
+  app.post("/api/ai/test", admin, async (req, res) => {
+    const input = z
+      .object({
+        requestId: uuid,
+        senderName: text.max(200),
+        senderEmail: email,
+        subject: text.max(1000),
+        body: text.max(6000),
+      })
+      .strict()
+      .parse(req.body);
+    if (aiBusy)
+      throw fail(
+        409,
+        "Modelul procesează deja un mesaj. Așteaptă finalizarea.",
+      );
+    aiBusy = true;
+    try {
+      const skills = (
+        await db.query(
+          "SELECT id,name FROM skills WHERE organization_id=$1 ORDER BY name",
+          [req.actor.org],
+        )
+      ).rows;
+      if (!skills.length)
+        throw fail(400, "Adaugă cel puțin o competență înainte de test.");
+      if (skills.length > 60)
+        throw fail(400, "Testul local acceptă maximum 60 de competențe.");
+      const examples = (
+        await db.query(
+          'SELECT skill_id AS "skillId",subject,body FROM classification_examples WHERE organization_id=$1 ORDER BY id LIMIT 8',
+          [req.actor.org],
+        )
+      ).rows;
+      const mailbox = (
+        await db.query(
+          "INSERT INTO mailboxes(id,organization_id,provider,address) VALUES($1,$2,'manual-test','relay-test@local.invalid') ON CONFLICT(organization_id,address) DO UPDATE SET address=EXCLUDED.address RETURNING id",
+          [randomUUID(), req.actor.org],
+        )
+      ).rows[0];
+      const saved = await storeMessage(db, req.actor, {
+        ...input,
+        mailboxId: mailbox.id,
+        externalId: input.requestId,
+        receivedAt: new Date().toISOString(),
+        priority: "Medie",
+      });
+      if (saved.duplicate)
+        return res.json({
+          ...saved,
+          classification: null,
+          notice: "Acest test a fost deja salvat. Nu a fost procesat din nou.",
+        });
+      let classification = null,
+        warning = null;
+      try {
+        classification = await ollama.classify({
+          subject: input.subject,
+          body: input.body,
+          skills,
+          examples,
+        });
+        await transaction(db, async (c) => {
+          await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
+            req.actor.org,
+          ]);
+          await requireSkill(c, req.actor.org, classification.skillId);
+          const current = (
+            await c.query("SELECT * FROM messages WHERE id=$1 FOR UPDATE", [
+              saved.id,
+            ])
+          ).rows[0];
+          if (current.status !== "Nou" || current.assigned_to)
+            throw fail(409, "Mesajul a fost modificat manual între timp.");
+          await c.query(
+            "UPDATE messages SET skill_id=$1,updated_at=now() WHERE id=$2",
+            [classification.skillId, saved.id],
+          );
+          await classifyMessage(c, req.actor, saved.id, classification);
+        });
+      } catch (e) {
+        classification = null;
+        warning =
+          e.status === 409
+            ? e.message
+            : {
+                OLLAMA_UNCERTAIN:
+                  "Modelul nu a identificat o competență potrivită. Mesajul este salvat pentru verificare.",
+                OLLAMA_INVALID_OUTPUT:
+                  "Modelul a returnat un rezultat invalid. Mesajul este salvat pentru verificare.",
+                OLLAMA_CONTEXT_TOO_LARGE:
+                  "Configurația este prea mare pentru contextul de test. Mesajul este salvat pentru verificare.",
+              }[e.code] ||
+              "Clasificarea locală nu a reușit. Mesajul este salvat, nealocat, pentru verificare. Verifică Ollama și modelul configurat.";
+        await event(
+          db,
+          req.actor.org,
+          saved.id,
+          req.actor,
+          "classification_failed",
+          { reason: e.code || "classification_error" },
+        );
+      }
+      const row = (
+        await db.query(
+          messageSelect + " WHERE m.id=$1 AND m.organization_id=$2",
+          [saved.id, req.actor.org],
+        )
+      ).rows[0];
+      res
+        .status(201)
+        .json({ ...saved, message: present(row), classification, warning });
+    } finally {
+      aiBusy = false;
+    }
+  });
   app.post("/api/ingest", async (req, res) => {
     if (req.actor.type !== "robot")
       throw fail(403, "Folosește cheia robotului");
     const b = ingestSchema.parse(req.body);
-    let duplicate = false;
-    const id = await transaction(db, async (c) => {
-      // Serialize assignments inside one organization so concurrent workers cannot overfill an agent.
-      await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
-        req.actor.org,
-      ]);
-      if (
-        !(
-          await c.query(
-            "SELECT 1 FROM mailboxes WHERE id=$1 AND organization_id=$2",
-            [b.mailboxId, req.actor.org],
-          )
-        ).rowCount
-      )
-        throw fail(404, "Adresă de email inexistentă");
-      const existing = await c.query(
-        "SELECT id FROM messages WHERE mailbox_id=$1 AND external_id=$2",
-        [b.mailboxId, b.externalId],
-      );
-      if (existing.rowCount) {
-        duplicate = true;
-        return existing.rows[0].id;
-      }
-      if (b.classification)
-        await requireSkill(c, req.actor.org, b.classification.skillId);
-      const id = randomUUID();
-      await c.query(
-        "INSERT INTO messages(id,organization_id,mailbox_id,external_id,thread_id,sender_name,sender_email,subject,body,received_at,priority,skill_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
-        [
-          id,
-          req.actor.org,
-          b.mailboxId,
-          b.externalId,
-          b.threadId || null,
-          b.senderName,
-          b.senderEmail,
-          b.subject,
-          b.body,
-          b.receivedAt,
-          b.priority,
-          b.classification?.skillId || null,
-        ],
-      );
-      await event(c, req.actor.org, id, req.actor, "received", {
-        mailboxId: b.mailboxId,
-        externalId: b.externalId,
-      });
-      if (b.classification) {
-        const cl = b.classification;
-        await c.query(
-          "INSERT INTO classifications(id,organization_id,message_id,skill_id,confidence,model,prompt_version,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
-          [
-            randomUUID(),
-            req.actor.org,
-            id,
-            cl.skillId,
-            cl.confidence,
-            cl.model,
-            cl.promptVersion,
-            cl.reason,
-          ],
-        );
-        await event(c, req.actor.org, id, req.actor, "classified", cl);
-        let agent;
-        if (cl.confidence >= 0.75) {
-          agent = (
-            await c.query(
-              `SELECT u.id FROM users u JOIN agent_skills a ON a.user_id=u.id WHERE u.organization_id=$1 AND a.skill_id=$2 AND u.active=true AND u.available=true AND (SELECT count(*) FROM messages WHERE assigned_to=u.id AND status<>'Rezolvat')<u.capacity ORDER BY (SELECT count(*) FROM messages WHERE assigned_to=u.id AND status<>'Rezolvat')::float/u.capacity, u.id LIMIT 1`,
-              [req.actor.org, cl.skillId],
-            )
-          ).rows[0];
-        }
-        if (agent) {
-          await c.query("UPDATE messages SET assigned_to=$1 WHERE id=$2", [
-            agent.id,
-            id,
-          ]);
-          await event(c, req.actor.org, id, req.actor, "assigned", {
-            from: null,
-            to: agent.id,
-            method: "skill-and-capacity",
-          });
-        } else
-          await event(c, req.actor.org, id, req.actor, "review_required", {
-            reason:
-              cl.confidence < 0.75 ? "low_confidence" : "no_eligible_agent",
-          });
-      } else
-        await event(c, req.actor.org, id, req.actor, "review_required", {
-          reason: "unclassified",
-        });
-      return id;
-    });
+    const { id, duplicate } = await storeMessage(db, req.actor, b);
     res.status(duplicate ? 200 : 201).json({ id, duplicate });
   });
+
   app.get("/api/messages", human, async (req, res) => {
     const b = z
       .object({
@@ -658,3 +689,101 @@ async function requireSkill(c, org, id) {
     throw fail(400, "Competență invalidă");
 }
 const dummyHash = hashPassword("unused-password-for-timing");
+
+async function classifyMessage(c, actor, id, cl) {
+  await c.query(
+    "INSERT INTO classifications(id,organization_id,message_id,skill_id,confidence,model,prompt_version,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+    [
+      randomUUID(),
+      actor.org,
+      id,
+      cl.skillId,
+      cl.confidence,
+      cl.model,
+      cl.promptVersion,
+      cl.reason,
+    ],
+  );
+  await event(c, actor.org, id, actor, "classified", cl);
+  let agent;
+  if (cl.confidence >= 0.75) {
+    agent = (
+      await c.query(
+        `SELECT u.id FROM users u JOIN agent_skills a ON a.user_id=u.id WHERE u.organization_id=$1 AND a.skill_id=$2 AND u.active=true AND u.available=true AND (SELECT count(*) FROM messages WHERE assigned_to=u.id AND status<>'Rezolvat')<u.capacity ORDER BY (SELECT count(*) FROM messages WHERE assigned_to=u.id AND status<>'Rezolvat')::float/u.capacity, u.id LIMIT 1`,
+        [actor.org, cl.skillId],
+      )
+    ).rows[0];
+  }
+  if (agent) {
+    await c.query("UPDATE messages SET assigned_to=$1 WHERE id=$2", [
+      agent.id,
+      id,
+    ]);
+    await event(c, actor.org, id, actor, "assigned", {
+      from: null,
+      to: agent.id,
+      method: "skill-and-capacity",
+    });
+  } else
+    await event(c, actor.org, id, actor, "review_required", {
+      reason: cl.confidence < 0.75 ? "low_confidence" : "no_eligible_agent",
+    });
+}
+
+async function storeMessage(db, actor, b) {
+  let duplicate = false;
+  const id = await transaction(db, async (c) => {
+    // Serialize assignments inside one organization so concurrent workers cannot overfill an agent.
+    await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
+      actor.org,
+    ]);
+    if (
+      !(
+        await c.query(
+          "SELECT 1 FROM mailboxes WHERE id=$1 AND organization_id=$2",
+          [b.mailboxId, actor.org],
+        )
+      ).rowCount
+    )
+      throw fail(404, "Adresă de email inexistentă");
+    const existing = await c.query(
+      "SELECT id FROM messages WHERE mailbox_id=$1 AND external_id=$2",
+      [b.mailboxId, b.externalId],
+    );
+    if (existing.rowCount) {
+      duplicate = true;
+      return existing.rows[0].id;
+    }
+    if (b.classification)
+      await requireSkill(c, actor.org, b.classification.skillId);
+    const id = randomUUID();
+    await c.query(
+      "INSERT INTO messages(id,organization_id,mailbox_id,external_id,thread_id,sender_name,sender_email,subject,body,received_at,priority,skill_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+      [
+        id,
+        actor.org,
+        b.mailboxId,
+        b.externalId,
+        b.threadId || null,
+        b.senderName,
+        b.senderEmail,
+        b.subject,
+        b.body,
+        b.receivedAt,
+        b.priority,
+        b.classification?.skillId || null,
+      ],
+    );
+    await event(c, actor.org, id, actor, "received", {
+      mailboxId: b.mailboxId,
+      externalId: b.externalId,
+    });
+    if (b.classification) await classifyMessage(c, actor, id, b.classification);
+    else
+      await event(c, actor.org, id, actor, "review_required", {
+        reason: "unclassified",
+      });
+    return id;
+  });
+  return { id, duplicate };
+}

@@ -41,7 +41,7 @@ Testele de integrare folosesc PostgreSQL real: sesiuni, drepturi, izolare firme,
 
 ## Integrarea robotului
 
-Vezi [docs/api.md](docs/api.md) și [scripts/relay_client.py](scripts/relay_client.py). Excelul poate rămâne sursa robotului în prima etapă: tagurile trebuie asociate cu UUID-urile competențelor din API. Pentru folosirea bazei de date drept sursă unică, importul Excel și editarea exemplelor din interfață sunt pași ulteriori; API-ul are deja endpointuri pentru exemple.
+Vezi [docs/api.md](docs/api.md) și [scripts/relay_client.py](scripts/relay_client.py). Excelul poate rămâne sursa robotului în prima etapă: tagurile trebuie asociate cu UUID-urile competențelor din API. Pentru folosirea bazei de date drept sursă unică, importul Excel și editarea/ștergerea exemplelor existente sunt pași ulteriori. Exemple noi pot fi adăugate în ecranul Test AI local.
 
 Modelul propune competența; backendul stabilește agentul din configurația curentă. Nu trimite parole Outlook/Gmail sau conținutul Excelului în frontend. Încrederea declarată de model nu este o probabilitate calibrată: pragul inițial trebuie evaluat pe exemple reale anonimizate înainte de automatizarea pentru clienți.
 
@@ -53,6 +53,20 @@ Dacă există un reverse proxy, configurează explicit `TRUST_PROXY_HOPS` la num
 
 ## Limite actuale
 
-Nu sunt implementate conectoare OAuth/IMAP, trimiterea răspunsurilor, atașamente, gruparea conversațiilor după thread, apelarea Ollama de backend, coadă de joburi/reîncercări, import Excel, SSO/MFA, invitații/resetare parole, retenție/ștergere sau monitorizare operațională. Notele sunt interne și **nu trimit emailuri**. Interfața reîncarcă datele la 30 de secunde și paginează câte 100 de mesaje; indicatorii de stare sunt ai paginii curente, iar timpul mediu de răspuns nu este încă calculat. ID-ul organizației delimitează firma, dar nu este un secret.
+Nu sunt implementate conectoare OAuth/IMAP, trimiterea răspunsurilor, atașamente, gruparea conversațiilor după thread, coadă de joburi/reîncercări, import Excel, SSO/MFA, invitații/resetare parole, retenție/ștergere sau monitorizare operațională. Notele sunt interne și **nu trimit emailuri**. Interfața reîncarcă datele la 30 de secunde și paginează câte 100 de mesaje; indicatorii de stare sunt ai paginii curente, iar timpul mediu de răspuns nu este încă calculat. ID-ul organizației delimitează firma, dar nu este un secret.
 
 Acesta este un MVP pentru dezvoltare, nu o instalare de producție completă. Conectarea robotului real și publicarea backendului cu autentificare și backupuri trebuie verificate înainte de introducerea mesajelor reale ale clienților.
+
+## Testare cu Ollama local pe Windows
+
+Cu aplicația și PostgreSQL deja configurate, instalează Ollama și rulează `ollama pull qwen3:8b`. Păstrează Ollama pornit. Backendul apelează implicit `http://127.0.0.1:11434`, modelul `qwen3:8b`; poți configura `OLLAMA_URL`, `OLLAMA_MODEL`, `OLLAMA_TIMEOUT_MS` în `.env`. Endpointul de inferență acceptă numai adrese loopback HTTP, fără redirecționări. Modelul rulează pe aceeași mașină ca backendul. Nu expune Ollama în rețea.
+
+Repornește `npm run api` și `npm run dev`. Autentifică-te ca administrator și deschide **Test AI local**. Adaugă exemple reprezentative asociate competențelor, apoi introdu subiectul și textul unui email și apasă **Clasifică și creează task**. Tagurile și exemplele sunt citite din PostgreSQL; nu sunt hardcodate în prompt. Primul apel poate dura câteva minute pe un laptop cu 16 GB RAM și 4 GB VRAM. Timeoutul implicit este 300 secunde. Procesul API admite un singur test AI simultan; acest MVP nu este încă un worker 24/7 sau o coadă cu reîncercări automate.
+
+Mesajul este salvat înainte de inferență. Rezultatul JSON trebuie să conțină un UUID de competență existent în firma curentă; tagurile inventate, răspunsurile invalide sau incertitudinea păstrează mesajul nealocat. Erorile apar în istoric. Un `requestId` stabil previne crearea unui al doilea task la retrimitere; un test nou din interfață generează un alt ID. Reluarea aceluiași ID nu repetă inferența. Repornirea API-ului în timpul clasificării lasă mesajul salvat pentru verificare, fără recuperare automată.
+
+Pentru a limita memoria/contextul, testul acceptă maximum 60 de competențe și 6000 de caractere de email. Promptul folosește primele patru exemple (ordonate după UUID), cu subiect de maximum 150 de caractere și corp de maximum 400; acesta este un selector simplu pentru pilot, nu căutare semantică. Dacă promptul depășește bugetul de caractere, exemplele sunt omise; dacă și configurația fără exemple este prea mare, mesajul rămâne pentru verificare. Estimarea de încredere a modelului nu este calibrată.
+
+Testele automate folosesc un server Ollama simulat pentru contractul HTTP și un clasificator injectat pentru integrarea cu PostgreSQL. Nu validează acuratețea Qwen sau viteza pe laptopul clientului; acestea se verifică prin testul local.
+
+Actualizare din ZIP pe Windows: oprește cele două terminale cu Ctrl+C, păstrează o copie privată a `.env`, descarcă arhiva actuală din GitHub și copiază conținutul ei peste folderul existent al aplicației. Păstrează `.env`; nu șterge baza PostgreSQL și nu rerula bootstrapul. Rulează `npm.cmd ci`, apoi repornește API-ul și interfața. Nu este necesară o migrare nouă pentru ecranul Test AI local.

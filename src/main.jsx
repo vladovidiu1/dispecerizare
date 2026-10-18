@@ -29,6 +29,7 @@ import {
 import "./style.css";
 import { api, backendEnabled } from "./api";
 import Login from "./Login";
+import AiTest from "./AiTest";
 const initial = [
   {
     id: 1048,
@@ -341,6 +342,7 @@ function App() {
     ["inbox", Inbox, "Mesaje"],
     ["agents", Users, "Echipă & competențe"],
     ["rules", SlidersHorizontal, "Reguli de distribuire"],
+    ...(backendEnabled ? [["ai", Sparkles, "Test AI local"]] : []),
   ];
   if (backendEnabled && !authLoaded)
     return <div className="login-page">Se încarcă…</div>;
@@ -373,7 +375,8 @@ function App() {
           {nav
             .filter(
               (x) =>
-                role === "Administrator" || !["agents", "rules"].includes(x[0]),
+                role === "Administrator" ||
+                !["agents", "rules", "ai"].includes(x[0]),
             )
             .map(([id, Icon, label]) => (
               <button
@@ -780,6 +783,8 @@ function App() {
                               review_required: "Necesită verificare",
                               updated: "Actualizat",
                               note_added: "Notă adăugată",
+                              classification_failed:
+                                "Clasificare locală nereușită",
                             }[h.type] || h.type}
                           </span>
                           {describeEvent(h) && (
@@ -1133,6 +1138,15 @@ function App() {
                 ))}
               </div>
             </>
+          ) : page === "ai" ? (
+            <AiTest
+              onOpen={async (id) => {
+                setOffset(0);
+                await refresh(0);
+                setSelected(id);
+                setPage("inbox");
+              }}
+            />
           ) : page === "rules" ? (
             <section className="panel coming">
               <span className="feature-icon">

@@ -1552,3 +1552,123 @@ legend {
   border-radius: 7px;
   padding: 12px 15px;
 }
+.mailbox-auth {
+  padding: 24px;
+  margin-bottom: 20px;
+}
+.mailbox-auth p {
+  font-size: 12px;
+  color: #94819f;
+  line-height: 1.8;
+}
+.device-code {
+  display: inline-block;
+  padding: 12px 20px;
+  font-size: 24px;
+  letter-spacing: 4px;
+  background: #f3ecfb;
+  border-radius: 8px;
+  margin: 5px 15px 10px 0;
+}
+.mail-checkbox {
+  flex-direction: row !important;
+  align-items: center;
+}
+.mail-checkbox input {
+  width: auto !important;
+}
+.form-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.form-help {
+  font-size: 11px;
+  line-height: 1.9;
+  color: #95869f;
+}
+.mailbox-list {
+  display: grid;
+  gap: 20px;
+}
+.mailbox-card {
+  padding: 22px;
+}
+.mailbox-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.mailbox-card h2 {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.mailbox-card p {
+  font-size: 11px;
+  color: #94849f;
+  line-height: 1.8;
+}
+.mailbox-card .error-text {
+  color: #b34d63;
+}
+.mailbox-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 15px;
+}
+.mailbox-search {
+  margin-top: 25px;
+}
+.ai-form details,
+.mailbox-card details {
+  font-size: 11px;
+  color: #927e9f;
+  line-height: 1.9;
+  margin: 15px 0;
+}
+.ai-form summary,
+.mailbox-card summary {
+  cursor: pointer;
+}
+.mailbox-card input {
+  padding: 10px;
+  border: 1px solid #e7dfef;
+  border-radius: 6px;
+  max-width: 100%;
+}
+.tag-confirmation {
+  margin: 12px 0;
+}
+.tag-confirmation > span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: #719b85;
+  line-height: 1.8;
+}
+@media (max-width: 600px) {
+  .form-columns {
+    grid-template-columns: 1fr;
+  }
+  .mailbox-card-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .mailbox-card-head > div {
+    max-width: 100%;
+  }
+}
+.sidebar {
+  overflow-y: auto;
+}
+@media (max-height: 850px) {
+  .demo-card {
+    display: none;
+  }
+  .sidebar-bottom {
+    padding-top: 20px;
+  }
+}

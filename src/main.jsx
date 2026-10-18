@@ -30,6 +30,7 @@ import "./style.css";
 import { api, backendEnabled } from "./api";
 import Login from "./Login";
 import AiTest from "./AiTest";
+import Mailboxes from "./Mailboxes";
 const initial = [
   {
     id: 1048,
@@ -311,6 +312,10 @@ function App() {
   function describeEvent(h) {
     const person = (id) =>
       team.find((a) => a.id === id)?.name || id || "Nealocat";
+    if (h.type === "tag_confirmed")
+      return (
+        skills.find((s) => s.id === h.data.skillId)?.name || "Fără competență"
+      );
     if (h.type === "assigned")
       return `${person(h.data.from)} → ${person(h.data.to)} · ${h.data.method === "manual" ? "manual" : "automat"}`;
     if (h.type === "classified")
@@ -348,7 +353,12 @@ function App() {
     ["inbox", Inbox, "Mesaje"],
     ["agents", Users, "Echipă & competențe"],
     ["rules", SlidersHorizontal, "Reguli de distribuire"],
-    ...(backendEnabled ? [["ai", Sparkles, "Test AI local"]] : []),
+    ...(backendEnabled
+      ? [
+          ["ai", Sparkles, "Test AI local"],
+          ["mailboxes", Mail, "Căsuțe email"],
+        ]
+      : []),
   ];
   if (backendEnabled && !authLoaded)
     return <div className="login-page">Se încarcă…</div>;
@@ -382,7 +392,7 @@ function App() {
             .filter(
               (x) =>
                 role === "Administrator" ||
-                !["agents", "rules", "ai"].includes(x[0]),
+                !["agents", "rules", "ai", "mailboxes"].includes(x[0]),
             )
             .map(([id, Icon, label]) => (
               <button
@@ -391,6 +401,8 @@ function App() {
                 onClick={() => {
                   setPage(id);
                   setSelected(null);
+                  if (backendEnabled && ["inbox", "overview"].includes(id))
+                    refresh().catch((e) => notify(e.message));
                 }}
               >
                 <Icon size={19} />
@@ -732,6 +744,38 @@ function App() {
                       </select>
                     </label>
                   </div>
+                  {backendEnabled && current.skillId && (
+                    <div className="tag-confirmation">
+                      {current.tagSource === "human" ? (
+                        <span>
+                          <Check size={14} />
+                          Tag confirmat de un om · folosit ca referință pentru
+                          clasificări viitoare
+                        </span>
+                      ) : (
+                        <button
+                          className="button white"
+                          onClick={async () => {
+                            try {
+                              await api(
+                                "/messages/" + current.id + "/confirm-tag",
+                                { method: "POST" },
+                              );
+                              await refresh();
+                              notify(
+                                "Tag confirmat. Mesajul poate fi folosit ca exemplu pentru clasificările viitoare.",
+                              );
+                            } catch (e) {
+                              notify(e.message);
+                            }
+                          }}
+                        >
+                          <Check size={14} />
+                          Confirmă tagul ca fiind corect
+                        </button>
+                      )}
+                    </div>
+                  )}
                   {backendEnabled && (
                     <p className="routing-hint">
                       Schimbarea competenței readuce taskul la „Nou” și îl
@@ -743,6 +787,32 @@ function App() {
                         : ""}
                     </p>
                   )}
+                  {backendEnabled &&
+                    role === "Administrator" &&
+                    !current.agentId &&
+                    current.tagSource !== "human" &&
+                    current.status === "Nou" && (
+                      <button
+                        className="button white"
+                        onClick={async () => {
+                          try {
+                            await api(
+                              "/messages/" +
+                                current.id +
+                                "/retry-classification",
+                              { method: "POST" },
+                            );
+                            notify(
+                              "Mesajul a fost pus în coada de clasificare.",
+                            );
+                          } catch (e) {
+                            notify(e.message);
+                          }
+                        }}
+                      >
+                        Reîncearcă clasificarea în fundal
+                      </button>
+                    )}
                   {current.replies?.map((r, i) => (
                     <div className="sent-reply" key={i}>
                       <strong>Maria Ionescu · Răspuns demonstrativ</strong>
@@ -802,6 +872,9 @@ function App() {
                               review_required: "Necesită verificare",
                               updated: "Actualizat",
                               note_added: "Notă adăugată",
+                              tag_confirmed: "Tag confirmat de un om",
+                              classification_discarded:
+                                "Rezultat AI ignorat: decizie umană prioritară",
                               classification_failed:
                                 "Clasificare locală nereușită",
                             }[h.type] || h.type}
@@ -1157,6 +1230,8 @@ function App() {
                 ))}
               </div>
             </>
+          ) : page === "mailboxes" ? (
+            <Mailboxes />
           ) : page === "ai" ? (
             <AiTest
               onOpen={async (id) => {

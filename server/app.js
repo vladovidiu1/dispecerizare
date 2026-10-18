@@ -6,6 +6,16 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { transaction } from "./db.js";
 import { createOllama } from "./ollama.js";
+import {
+  event,
+  requireSkill,
+  classifyMessage,
+  storeMessage,
+  eligibleAgent,
+} from "./messages.js";
+import { getContext } from "./context.js";
+import { createAiRunner } from "./ai-runner.js";
+import { createMailService, registerMailRoutes } from "./mail-service.js";
 import { checkPassword, hashPassword, hashToken, token } from "./security.js";
 const uuid = z.string().uuid(),
   text = z.string().trim().min(1),
@@ -21,12 +31,6 @@ const publicUser = (u) => ({
   role: u.role,
   organizationId: u.organization_id,
 });
-async function event(c, org, message, actor, type, data) {
-  await c.query(
-    "INSERT INTO message_events(organization_id,message_id,actor_id,actor_type,type,data) VALUES($1,$2,$3,$4,$5,$6)",
-    [org, message, actor.id || null, actor.type, type, data],
-  );
-}
 const agentSchema = z.object({
   name: text.max(150),
   email,
@@ -82,6 +86,7 @@ function present(m) {
       timeZone: "Europe/Bucharest",
     }).format(m.received_at),
     externalId: m.external_id,
+    tagSource: m.tag_source,
   };
 }
 export function createApp(
@@ -91,6 +96,8 @@ export function createApp(
     appOrigin = "http://localhost:5173",
     trustProxyHops = 0,
     ollama = createOllama(),
+    aiRunner = createAiRunner(db, ollama),
+    mailService = createMailService(db),
   } = {},
 ) {
   const app = express();
@@ -268,7 +275,7 @@ export function createApp(
       .json(
         (
           await db.query(
-            "INSERT INTO classification_examples VALUES($1,$2,$3,$4,$5) RETURNING id",
+            "INSERT INTO classification_examples(id,organization_id,skill_id,subject,body) VALUES($1,$2,$3,$4,$5) RETURNING id",
             [randomUUID(), req.actor.org, b.skillId, b.subject, b.body],
           )
         ).rows[0],
@@ -400,7 +407,7 @@ export function createApp(
     if (!r.rowCount) throw fail(404, "Cheie inexistentă");
     res.status(204).end();
   });
-  let aiBusy = false;
+  registerMailRoutes(app, admin, mailService);
   app.get("/api/ai/status", admin, async (req, res) => {
     res.json(await ollama.status());
   });
@@ -415,13 +422,7 @@ export function createApp(
       })
       .strict()
       .parse(req.body);
-    if (aiBusy)
-      throw fail(
-        409,
-        "Modelul procesează deja un mesaj. Așteaptă finalizarea.",
-      );
-    aiBusy = true;
-    try {
+    return aiRunner.run(async () => {
       const skills = (
         await db.query(
           "SELECT id,name FROM skills WHERE organization_id=$1 ORDER BY name",
@@ -432,12 +433,12 @@ export function createApp(
         throw fail(400, "Adaugă cel puțin o competență înainte de test.");
       if (skills.length > 60)
         throw fail(400, "Testul local acceptă maximum 60 de competențe.");
-      const examples = (
-        await db.query(
-          'SELECT skill_id AS "skillId",subject,body FROM classification_examples WHERE organization_id=$1 ORDER BY id LIMIT 8',
-          [req.actor.org],
-        )
-      ).rows;
+      const examples = await getContext(
+        db,
+        req.actor.org,
+        input.subject,
+        input.body,
+      );
       const mailbox = (
         await db.query(
           "INSERT INTO mailboxes(id,organization_id,provider,address) VALUES($1,$2,'manual-test','relay-test@local.invalid') ON CONFLICT(organization_id,address) DO UPDATE SET address=EXCLUDED.address RETURNING id",
@@ -476,13 +477,20 @@ export function createApp(
               saved.id,
             ])
           ).rows[0];
-          if (current.status !== "Nou" || current.assigned_to)
+          if (
+            current.status !== "Nou" ||
+            current.assigned_to ||
+            current.tag_source === "human"
+          )
             throw fail(409, "Mesajul a fost modificat manual între timp.");
           await c.query(
             "UPDATE messages SET skill_id=$1,updated_at=now() WHERE id=$2",
             [classification.skillId, saved.id],
           );
-          await classifyMessage(c, req.actor, saved.id, classification);
+          await classifyMessage(c, req.actor, saved.id, {
+            ...classification,
+            exampleRefs: examples.map((e) => ({ id: e.id, source: e.source })),
+          });
         });
       } catch (e) {
         classification = null;
@@ -516,10 +524,9 @@ export function createApp(
       res
         .status(201)
         .json({ ...saved, message: present(row), classification, warning });
-    } finally {
-      aiBusy = false;
-    }
+    });
   });
+
   app.post("/api/ingest", async (req, res) => {
     if (req.actor.type !== "robot")
       throw fail(403, "Folosește cheia robotului");
@@ -600,6 +607,50 @@ export function createApp(
     });
     res.status(201).json({ saved: true });
   });
+  app.post(
+    "/api/messages/:id/retry-classification",
+    admin,
+    async (req, res) => {
+      await transaction(db, async (c) => {
+        await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
+          req.actor.org,
+        ]);
+        const m = await accessible(c, req.actor, req.params.id, true);
+        if (m.tag_source === "human" || m.assigned_to || m.status !== "Nou")
+          throw fail(
+            409,
+            "Doar mesajele noi, nealocate și neconfirmate pot fi reprocesate",
+          );
+        await c.query(
+          "INSERT INTO processing_jobs(message_id,organization_id) VALUES($1,$2) ON CONFLICT(message_id) DO UPDATE SET state='pending',attempts=0,next_attempt_at=now(),lease_until=NULL,last_error=NULL,updated_at=now()",
+          [m.id, req.actor.org],
+        );
+      });
+      res.status(202).json({ queued: true });
+    },
+  );
+  app.post("/api/messages/:id/confirm-tag", human, async (req, res) => {
+    await transaction(db, async (c) => {
+      await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
+        req.actor.org,
+      ]);
+      const m = await accessible(c, req.actor, req.params.id, true);
+      if (!m.skill_id)
+        throw fail(400, "Mesajul nu are o competență de confirmat");
+      await c.query(
+        "UPDATE messages SET tag_source='human',tag_confirmed_by=$1,tag_confirmed_at=now(),updated_at=now() WHERE id=$2",
+        [req.actor.id, m.id],
+      );
+      await c.query(
+        "UPDATE processing_jobs SET state='cancelled',lease_until=NULL WHERE message_id=$1 AND state IN ('pending','running','retry')",
+        [m.id],
+      );
+      await event(c, req.actor.org, m.id, req.actor, "tag_confirmed", {
+        skillId: m.skill_id,
+      });
+    });
+    res.status(204).end();
+  });
   app.patch("/api/messages/:id", human, async (req, res) => {
     const b = z
       .object({
@@ -626,6 +677,19 @@ export function createApp(
       ]);
       const m = await accessible(c, req.actor, req.params.id, true);
       if (b.skillId) await requireSkill(c, req.actor.org, b.skillId);
+      if ("skillId" in b) {
+        await c.query(
+          "UPDATE messages SET tag_source='human',tag_confirmed_by=$1,tag_confirmed_at=now() WHERE id=$2",
+          [req.actor.id, m.id],
+        );
+        await c.query(
+          "UPDATE processing_jobs SET state='cancelled',lease_until=NULL WHERE message_id=$1 AND state IN ('pending','running','retry')",
+          [m.id],
+        );
+        await event(c, req.actor.org, m.id, req.actor, "tag_confirmed", {
+          skillId: b.skillId,
+        });
+      }
       const retag = "skillId" in b && b.skillId !== m.skill_id;
       const reroute = retag && !("assignedTo" in b);
       if (reroute && "status" in b)
@@ -721,117 +785,4 @@ export function createApp(
   });
   return app;
 }
-async function requireSkill(c, org, id) {
-  if (
-    !(
-      await c.query("SELECT 1 FROM skills WHERE organization_id=$1 AND id=$2", [
-        org,
-        id,
-      ])
-    ).rowCount
-  )
-    throw fail(400, "Competență invalidă");
-}
 const dummyHash = hashPassword("unused-password-for-timing");
-
-async function classifyMessage(c, actor, id, cl) {
-  await c.query(
-    "INSERT INTO classifications(id,organization_id,message_id,skill_id,confidence,model,prompt_version,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
-    [
-      randomUUID(),
-      actor.org,
-      id,
-      cl.skillId,
-      cl.confidence,
-      cl.model,
-      cl.promptVersion,
-      cl.reason,
-    ],
-  );
-  await event(c, actor.org, id, actor, "classified", cl);
-  let agent;
-  if (cl.confidence >= 0.75) {
-    agent = await eligibleAgent(c, actor.org, cl.skillId);
-  }
-  if (agent) {
-    await c.query("UPDATE messages SET assigned_to=$1 WHERE id=$2", [
-      agent.id,
-      id,
-    ]);
-    await event(c, actor.org, id, actor, "assigned", {
-      from: null,
-      to: agent.id,
-      method: "skill-and-capacity",
-    });
-  } else
-    await event(c, actor.org, id, actor, "review_required", {
-      reason: cl.confidence < 0.75 ? "low_confidence" : "no_eligible_agent",
-    });
-}
-
-async function storeMessage(db, actor, b) {
-  let duplicate = false;
-  const id = await transaction(db, async (c) => {
-    // Serialize assignments inside one organization so concurrent workers cannot overfill an agent.
-    await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
-      actor.org,
-    ]);
-    if (
-      !(
-        await c.query(
-          "SELECT 1 FROM mailboxes WHERE id=$1 AND organization_id=$2",
-          [b.mailboxId, actor.org],
-        )
-      ).rowCount
-    )
-      throw fail(404, "Adresă de email inexistentă");
-    const existing = await c.query(
-      "SELECT id FROM messages WHERE mailbox_id=$1 AND external_id=$2",
-      [b.mailboxId, b.externalId],
-    );
-    if (existing.rowCount) {
-      duplicate = true;
-      return existing.rows[0].id;
-    }
-    if (b.classification)
-      await requireSkill(c, actor.org, b.classification.skillId);
-    const id = randomUUID();
-    await c.query(
-      "INSERT INTO messages(id,organization_id,mailbox_id,external_id,thread_id,sender_name,sender_email,subject,body,received_at,priority,skill_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
-      [
-        id,
-        actor.org,
-        b.mailboxId,
-        b.externalId,
-        b.threadId || null,
-        b.senderName,
-        b.senderEmail,
-        b.subject,
-        b.body,
-        b.receivedAt,
-        b.priority,
-        b.classification?.skillId || null,
-      ],
-    );
-    await event(c, actor.org, id, actor, "received", {
-      mailboxId: b.mailboxId,
-      externalId: b.externalId,
-    });
-    if (b.classification) await classifyMessage(c, actor, id, b.classification);
-    else
-      await event(c, actor.org, id, actor, "review_required", {
-        reason: "unclassified",
-      });
-    return id;
-  });
-  return { id, duplicate };
-}
-
-async function eligibleAgent(c, org, skillId) {
-  return (
-    await c.query(
-      `SELECT u.id FROM users u JOIN agent_skills a ON a.user_id=u.id WHERE u.organization_id=$1 AND a.skill_id=$2 AND u.active=true AND u.available=true AND (SELECT count(*) FROM messages WHERE assigned_to=u.id AND status<>'Rezolvat')<u.capacity ORDER BY (SELECT count(*) FROM messages WHERE assigned_to=u.id AND status<>'Rezolvat')::float/u.capacity, u.id LIMIT 1`,
-      [org, skillId],
-    )
-  ).rows[0];
-}

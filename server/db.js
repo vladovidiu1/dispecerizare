@@ -19,17 +19,27 @@ export async function migrate(db) {
     await c.query(
       "CREATE TABLE IF NOT EXISTS schema_migrations (version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())",
     );
-    if (
-      !(await c.query("SELECT 1 FROM schema_migrations WHERE version='001'"))
-        .rowCount
-    ) {
-      await c.query(
-        await readFile(
-          new URL("./migrations/001_initial.sql", import.meta.url),
-          "utf8",
-        ),
-      );
-      await c.query("INSERT INTO schema_migrations(version) VALUES('001')");
+    for (const [version, file] of [
+      ["001", "001_initial.sql"],
+      ["002", "002_mail_learning.sql"],
+    ]) {
+      if (
+        !(
+          await c.query("SELECT 1 FROM schema_migrations WHERE version=$1", [
+            version,
+          ])
+        ).rowCount
+      ) {
+        await c.query(
+          await readFile(
+            new URL("./migrations/" + file, import.meta.url),
+            "utf8",
+          ),
+        );
+        await c.query("INSERT INTO schema_migrations(version) VALUES($1)", [
+          version,
+        ]);
+      }
     }
     await c.query("COMMIT");
   } catch (e) {

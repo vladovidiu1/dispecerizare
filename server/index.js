@@ -2,6 +2,9 @@ import express from "express";
 import { fileURLToPath } from "node:url";
 import { connectDb, migrate } from "./db.js";
 import { createApp } from "./app.js";
+import { createOllama } from "./ollama.js";
+import { createAiRunner, startWorkers } from "./ai-runner.js";
+import { createMailService } from "./mail-service.js";
 if (
   process.env.NODE_ENV === "production" &&
   !process.env.APP_ORIGIN?.startsWith("https://")
@@ -9,7 +12,14 @@ if (
   throw new Error("Production requires HTTPS APP_ORIGIN");
 const db = connectDb();
 await migrate(db);
+const ollama = createOllama(),
+  aiRunner = createAiRunner(db, ollama),
+  mailService = createMailService(db);
+const stopWorkers = startWorkers(db, mailService, aiRunner);
 const app = createApp(db, {
+  ollama,
+  aiRunner,
+  mailService,
   production: process.env.NODE_ENV === "production",
   trustProxyHops: Number(process.env.TRUST_PROXY_HOPS || 0),
   appOrigin: process.env.APP_ORIGIN || "http://localhost:5173",
@@ -26,6 +36,7 @@ const server = app.listen(
 );
 async function shutdown() {
   server.close(async () => {
+    await stopWorkers();
     await db.end();
     process.exit(0);
   });

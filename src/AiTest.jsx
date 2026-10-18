@@ -193,8 +193,8 @@ export default function AiTest({ onOpen }) {
           <h2>Exemple pentru model</h2>
           <p>
             Competențele și exemplele sunt citite din baza de date a firmei.
-            Pentru acest pilot, promptul folosește primele patru exemple (după
-            ID), cu texte scurtate.
+            Modelul primește exemple relevante și emailuri confirmate de oameni,
+            selectate din istoricul firmei.
           </p>
           <form
             onSubmit={async (e) => {

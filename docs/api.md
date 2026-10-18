@@ -101,3 +101,11 @@ Sursa mesajelor de test este o adresă internă fictivă cu provider `manual-tes
 | DELETE /mail-connections/:id          | Elimină configurația și starea conexiunii, păstrând căsuța/taskurile; permite reconfigurare inclusiv dacă cheia locală a fost pierdută                                                            |
 
 Conectorii nu acceptă hostname-uri IMAP arbitrare, redirecționări Graph externe sau verificare TLS dezactivată. Outlook folosește Graph OAuth delegat, inclusiv refresh token criptat, nu parola contului. Gmail/Yahoo folosesc parole de aplicație prin IMAP TLS. Înregistrarea aplicației Microsoft și politicile furnizorilor rămân cerințe externe; vezi [email-setup.md](email-setup.md). API-ul trebuie să rămână pornit pentru monitorizare; acest cod nu instalează încă un serviciu Windows sau executabil.
+
+### Pornire fără istoric
+
+`POST /mail-connections/:id/start-now` (admin, conexiune oprită) verifică accesul, salvează un checkpoint nou și activează monitorizarea. Răspunde `{ok:true,monitorFrom}` și nu importă mesaje. Gmail/Yahoo folosesc `uidValidity` și `UIDNEXT - 1`; Outlook folosește un `since` UTC pentru primul delta. GET /mail-connections expune `startMode` și `monitorFrom`, fără credențiale. Modul și ancora sunt păstrate în `sync_state` la fiecare scanare și la restart.
+
+O conexiune activă răspunde 409 pentru start-now: oprește-o explicit înainte de a elimina backlogul neimportat prin alegerea unui checkpoint nou. O schimbare UIDVALIDITY în modul future nu revine la o căutare istorică, ci răspunde `MAIL_UIDVALIDITY_CHANGED`. Snapshotul necesită UIDNEXT valid; în lipsa lui nu activează monitorizarea.
+
+PATCH `{enabled:true}` păstrează comportamentul anterior: reia checkpointul existent sau, în lipsa lui, importă istoricul configurat. Interfața prezintă aceste acțiuni separat. Mesajele deja importate și joburile lor nu sunt șterse/anulate de reinițializarea checkpointului.

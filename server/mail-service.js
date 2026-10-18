@@ -125,7 +125,7 @@ export function createMailService(
   const service = {
     async list(org) {
       const { rows } = await db.query(
-        `SELECT c.id,c.provider,c.enabled,c.initial_days AS "initialDays",c.poll_seconds AS "pollSeconds",c.last_synced_at AS "lastSyncedAt",c.last_error AS "lastError",m.address,c.encrypted_credentials,(SELECT count(*)::int FROM processing_jobs j JOIN messages x ON x.id=j.message_id WHERE x.mailbox_id=c.mailbox_id AND j.state IN ('pending','running','retry')) AS queued FROM mailbox_connections c JOIN mailboxes m ON m.id=c.mailbox_id WHERE c.organization_id=$1 ORDER BY c.created_at DESC`,
+        `SELECT c.id,c.provider,c.enabled,c.initial_days AS "initialDays",c.poll_seconds AS "pollSeconds",c.last_synced_at AS "lastSyncedAt",c.last_error AS "lastError",c.sync_state->>'startMode' AS "startMode",c.sync_state->>'since' AS "monitorFrom",m.address,c.encrypted_credentials,(SELECT count(*)::int FROM processing_jobs j JOIN messages x ON x.id=j.message_id WHERE x.mailbox_id=c.mailbox_id AND j.state IN ('pending','running','retry')) AS queued FROM mailbox_connections c JOIN mailboxes m ON m.id=c.mailbox_id WHERE c.organization_id=$1 ORDER BY c.created_at DESC`,
         [org],
       );
       return Promise.all(
@@ -189,6 +189,24 @@ export function createMailService(
           );
           throw e;
         }
+      });
+    },
+    async startNow(id, org) {
+      return exclusive(id, org, async (row, c) => {
+        if (row.enabled)
+          throw Object.assign(
+            new Error(
+              "Oprește monitorizarea înainte să alegi un punct nou de pornire.",
+            ),
+            { status: 409 },
+          );
+        const result = await providers.startNow(row, c);
+        await saveCredentials(id, result.credentials);
+        await db.query(
+          "UPDATE mailbox_connections SET sync_state=$1,enabled=true,last_attempt_at=NULL,last_error=NULL WHERE id=$2",
+          [result.state, id],
+        );
+        return { ok: true, monitorFrom: result.state.since };
       });
     },
     async update(id, org, input) {
@@ -427,6 +445,7 @@ export function registerMailRoutes(app, admin, service) {
     res.json(await service.password(req.params.id, req.actor.org, req.body)),
   );
   for (const [route, method] of [
+    ["start-now", "startNow"],
     ["check", "check"],
     ["authorize", "authorize"],
     ["sync", "sync"],

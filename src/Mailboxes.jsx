@@ -12,6 +12,8 @@ const errors = {
     "Furnizorul nu răspunde. Verifică rețeaua și setările contului.",
   MAIL_PROVIDER: "Furnizorul a refuzat cererea. Verifică permisiunile.",
   MAIL_ACCOUNT_MISMATCH: "Contul autorizat nu corespunde adresei configurate.",
+  MAIL_UIDVALIDITY_CHANGED:
+    "Căsuța și-a schimbat identificatorul. Oprește monitorizarea și pornește din nou doar de acum; istoricul nu este importat automat.",
   MAIL_VAULT:
     "Cheia locală pentru credențiale lipsește sau nu corespunde. Restaurează cheia ori reconfigurează conexiunea.",
 };
@@ -246,7 +248,7 @@ export default function Mailboxes() {
             )}
             <div className="form-columns">
               <label>
-                Import inițial: ultimele zile
+                Import istoric opțional: ultimele zile
                 <input
                   name="initialDays"
                   type="number"
@@ -302,6 +304,12 @@ export default function Mailboxes() {
                   {r.enabled ? "Monitorizare activă" : "Oprită"}
                 </span>
               </div>
+              {r.monitorFrom && (
+                <p>
+                  Doar mesaje noi de la:{" "}
+                  {new Date(r.monitorFrom).toLocaleString("ro-RO")}
+                </p>
+              )}
               <p>
                 {r.authorized
                   ? "Credențiale configurate"
@@ -358,25 +366,58 @@ export default function Mailboxes() {
                   disabled={busy || (!r.authorized && !r.enabled)}
                   onClick={() =>
                     action(async () => {
-                      await api("/mail-connections/" + r.id, {
-                        method: "PATCH",
-                        body: { enabled: !r.enabled },
-                      });
-                      setMessage(
-                        r.enabled
-                          ? "Monitorizare oprită."
-                          : "Monitorizare activată. Backendul trebuie să rămână pornit.",
-                      );
+                      if (r.enabled) {
+                        await api("/mail-connections/" + r.id, {
+                          method: "PATCH",
+                          body: { enabled: false },
+                        });
+                        setMessage("Monitorizare oprită.");
+                      } else {
+                        await api("/mail-connections/" + r.id + "/start-now", {
+                          method: "POST",
+                        });
+                        setMessage(
+                          "Monitorizare pornită doar pentru emailurile sosite de acum. Mesajele existente în Inbox au fost ignorate. Poți trimite un email nou pentru test.",
+                        );
+                      }
                     })
                   }
                 >
                   {r.enabled
                     ? "Oprește monitorizarea"
-                    : "Activează monitorizarea"}
+                    : "Pornește doar de acum"}
                 </button>
+                {!r.enabled && (
+                  <button
+                    className="button white"
+                    disabled={busy || !r.authorized}
+                    onClick={() =>
+                      action(async () => {
+                        await api("/mail-connections/" + r.id, {
+                          method: "PATCH",
+                          body: { enabled: true },
+                        });
+                        setMessage(
+                          r.monitorFrom || r.lastSyncedAt
+                            ? "Monitorizare reluată de la ultimul punct salvat."
+                            : "Monitorizare activată cu importul istoricului recent configurat.",
+                        );
+                      })
+                    }
+                  >
+                    {r.monitorFrom || r.lastSyncedAt
+                      ? "Reia de la ultima verificare"
+                      : `Pornește cu istoric (${r.initialDays} ${r.initialDays === 1 ? "zi" : "zile"})`}
+                  </button>
+                )}
                 <button
                   className="button white"
-                  disabled={busy || !r.authorized}
+                  disabled={
+                    busy ||
+                    !r.authorized ||
+                    (!r.enabled && !r.monitorFrom && !r.lastSyncedAt)
+                  }
+                  title="Alege mai întâi punctul de pornire al monitorizării"
                   onClick={() =>
                     action(async () => {
                       const data = await api(

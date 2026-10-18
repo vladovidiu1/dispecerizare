@@ -28,7 +28,7 @@ Adresa singură nu permite accesul la email. Este necesară o înregistrare de a
 2. Pentru început păstrează importul la **1 zi** și verificarea la **60 secunde**. Salvează conexiunea; ea este oprită implicit.
 3. Apasă **Autorizează Microsoft**. Deschide pagina Microsoft din aplicație, introdu codul temporar și autentifică utilizatorul cu acces la căsuță. Verifică numele aplicației și permisiunile afișate. Pentru shared mailbox folosește un utilizator cu drepturi delegate reale asupra ei; nu încerca login direct cu shared mailbox.
 4. Lasă Relay deschis până confirmă autorizarea. După restartul serverului, o autorizare neterminată se începe din nou. Contul personal Microsoft și shared mailbox au cerințe diferite; pilotul firmei folosește tenantul organizației.
-5. Apasă **Verifică**, apoi **Sincronizează acum**. Emailurile importate devin taskuri și se clasifică pe rând. Pentru monitorizare continuă apasă **Activează monitorizarea**.
+5. Apasă **Verifică**, apoi **Pornește doar de acum**. Această acțiune salvează punctul de pornire și activează monitorizarea fără importul emailurilor existente. După mesajul de confirmare trimite un email nou pentru test. Dacă vrei intenționat și mesaje vechi, alege separat **Pornește cu istoric**.
 
 Graph citește Inbox, păstrează ID-uri imuabile și un cursor delta. Nu mută, nu șterge și nu marchează mesajele ca citite. Politicile Microsoft, expirarea/revocarea acordului sau lipsa accesului la shared mailbox pot necesita reautorizare; aplicația afișează eroarea conexiunii.
 
@@ -38,7 +38,7 @@ Referințe oficiale: [Device authorization grant](https://learn.microsoft.com/en
 
 1. Activează verificarea în doi pași în contul Google.
 2. Dacă este permis pentru cont, generează o [parolă de aplicație](https://support.google.com/accounts/answer/185833) pentru Relay. Nu folosi parola obișnuită.
-3. În Relay alege **Gmail**, introdu adresa și parola de aplicație în formular. Salvează, verifică accesul, sincronizează și activează monitorizarea.
+3. În Relay alege **Gmail**, introdu adresa și parola de aplicație în formular. Salvează, verifică accesul și apasă **Pornește doar de acum**. Așteaptă confirmarea, apoi trimite un email nou pentru test. Mesajele deja existente, citite sau necitite, sunt ignorate.
 
 Se folosește `imap.gmail.com:993` cu TLS validat. Unele conturi Workspace, Advanced Protection sau politici de autentificare nu permit parole de aplicație/IMAP. În acel caz acest conector nu poate fi folosit fără modificarea aprobată a politicii sau implementarea OAuth Gmail. OAuth Gmail nu este inclus în această versiune.
 
@@ -67,3 +67,13 @@ Testarea automată din proiect folosește furnizori simulați și PostgreSQL rea
 ## Destinații de rețea
 
 Serverul trebuie să poată accesa `login.microsoftonline.com:443` și `graph.microsoft.com:443` pentru Outlook; browserul administratorului deschide paginile Microsoft de autentificare. Gmail necesită `imap.gmail.com:993`, iar Yahoo `imap.mail.yahoo.com:993`. Ollama rămâne pe loopback, implicit portul 11434; PostgreSQL nu se expune public. O rețea corporativă ce permite doar HTTP poate necesita aprobarea accesului IMAP de către IT; acest conector nu instalează VPN și nu dezactivează TLS.
+
+## Test fără import de mesaje vechi
+
+Pentru o conexiune deja salvată și verificată, nu este necesar să o ștergi sau să regenerezi parola. Cât timp monitorizarea este oprită, apasă **Pornește doar de acum**. Aplicația verifică metadatele căsuței, salvează checkpointul și activează monitorizarea, fără să importe mesajele existente. Trimite emailul de test numai după confirmarea pornirii. **Sincronizează acum** este dezactivat pentru o conexiune nouă fără un punct de pornire ales.
+
+Pentru Gmail/Yahoo este folosit UIDNEXT din Inbox, nu starea citit/necitit și nu data scrisă de expeditor în email. Pentru Outlook, prima cerere delta este filtrată după momentul de activare (ceasul serverului trebuie sincronizat). Mesajele noi sunt verificate la intervalul configurat și apoi procesate pe rând de model.
+
+Oprirea și alegerea **Reia de la ultima verificare** importă și mesajele sosite în pauză, de la checkpointul păstrat. Alegerea din nou a **Pornește doar de acum** setează alt checkpoint și ignoră mesajele încă neimportate din acea pauză. Niciuna dintre aceste opțiuni nu șterge taskuri deja existente în SQL, nu anulează joburile deja importate și nu modifică starea citit/necitit a emailurilor. Căutarea și importul manual rămân disponibile pentru mesaje vechi dacă administratorul le selectează explicit.
+
+Nu este necesară o migrare SQL nouă pentru această opțiune; punctul de pornire folosește câmpul JSON de sincronizare existent.

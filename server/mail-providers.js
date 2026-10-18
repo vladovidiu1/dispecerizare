@@ -274,15 +274,44 @@ export function createMailProviders({
         account: credentials.address,
       }));
     },
+    async startNow(connection, credentials) {
+      if (credentials.provider === "outlook") {
+        const auth = await refreshMicrosoft(credentials);
+        await verifyMicrosoft(auth.credentials, auth.accessToken);
+        return {
+          credentials: auth.credentials,
+          state: { startMode: "future", since: new Date().toISOString() },
+        };
+      }
+      return withClient(credentials, async (client, box) => {
+        const next = Number(box.uidNext);
+        if (!Number.isSafeInteger(next) || next < 1)
+          throw mailError(
+            "MAIL_CURSOR_INVALID",
+            "Furnizorul nu a returnat un punct sigur de pornire. Nu au fost importate mesaje.",
+          );
+        return {
+          credentials,
+          state: {
+            startMode: "future",
+            since: new Date().toISOString(),
+            uidValidity: String(box.uidValidity),
+            lastUid: next - 1,
+          },
+        };
+      });
+    },
     async scan(connection, credentials) {
       if (credentials.provider === "outlook") {
         const auth = await refreshMicrosoft(credentials);
         let path = connection.sync_state.cursor;
         if (!path) {
-          const since = new Date(
-            new Date(connection.created_at).getTime() -
-              connection.initial_days * 86400000,
-          ).toISOString();
+          const since =
+            connection.sync_state.since ||
+            new Date(
+              new Date(connection.created_at).getTime() -
+                connection.initial_days * 86400000,
+            ).toISOString();
           path =
             graphPath(credentials) +
             "/mailFolders/inbox/messages/delta?" +
@@ -299,6 +328,7 @@ export function createMailProviders({
             .filter((m) => !m["@removed"])
             .map(normalizeGraph),
           state: {
+            ...connection.sync_state,
             cursor: data["@odata.nextLink"] || data["@odata.deltaLink"] || path,
           },
         };
@@ -306,8 +336,17 @@ export function createMailProviders({
       return withClient(credentials, async (client, box) => {
         const previous = connection.sync_state;
         const same = String(previous.uidValidity) === String(box.uidValidity);
+        if (previous.startMode === "future" && !same)
+          throw mailError(
+            "MAIL_UIDVALIDITY_CHANGED",
+            "Căsuța și-a schimbat identificatorul intern. Oprește monitorizarea și alege din nou „Pornește doar de acum”.",
+          );
         const last = same ? Number(previous.lastUid || 0) : 0;
-        const query = last
+        const checkpoint =
+          same &&
+          Number.isSafeInteger(previous.lastUid) &&
+          previous.lastUid >= 0;
+        const query = checkpoint
           ? { uid: `${last + 1}:*` }
           : {
               since: new Date(
@@ -326,6 +365,7 @@ export function createMailProviders({
           credentials,
           messages,
           state: {
+            ...previous,
             uidValidity: String(box.uidValidity),
             lastUid: uids.at(-1) || last,
           },

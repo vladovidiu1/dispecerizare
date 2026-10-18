@@ -235,3 +235,138 @@ test("oversize IMAP messages retain metadata for manual review without downloadi
   assert.equal(source, false);
   assert.equal(r.messages[0].skipAi, true);
 });
+
+test("start-now snapshots IMAP UIDNEXT without reading existing messages and imports only higher UIDs", async () => {
+  let fetches = [],
+    phase = "baseline",
+    seenQuery;
+  const providers = createMailProviders({
+    imapFactory: () => ({
+      on() {},
+      async connect() {},
+      async mailboxOpen(name, opts) {
+        assert.equal(opts.readOnly, true);
+        return { uidValidity: 7n, uidNext: 101 };
+      },
+      async search(q) {
+        seenQuery = q;
+        return phase === "baseline" ? [100] : [100, 101];
+      },
+      async fetchOne(uid, fields) {
+        fetches.push(uid);
+        return fields.source
+          ? { source: Buffer.from("fixture") }
+          : { size: 100, envelope: {} };
+      },
+      async logout() {},
+      close() {},
+    }),
+    parseEmail: async () => ({
+      from: { value: [{ address: "client@example.test" }] },
+      subject: "Nou",
+      text: "Nou",
+      date: new Date(),
+    }),
+  });
+  const credentials = {
+    provider: "gmail",
+    address: "test@example.test",
+    appPassword: "fixture",
+  };
+  const started = await providers.startNow({}, credentials);
+  assert.equal(started.state.lastUid, 100);
+  assert.equal(fetches.length, 0);
+  let r = await providers.scan({ sync_state: started.state }, credentials);
+  assert.deepEqual(seenQuery, { uid: "101:*" });
+  assert.equal(r.messages.length, 0);
+  assert.equal(fetches.length, 0);
+  phase = "new";
+  r = await providers.scan({ sync_state: r.state }, credentials);
+  assert.equal(r.messages.length, 1);
+  assert.equal(r.messages[0].externalId, "7:101");
+  assert.equal(r.state.startMode, "future");
+  assert.ok(fetches.every((u) => u === "101"));
+  await assert.rejects(
+    () =>
+      providers.scan(
+        { sync_state: { ...started.state, uidValidity: "6" } },
+        credentials,
+      ),
+    { code: "MAIL_UIDVALIDITY_CHANGED" },
+  );
+});
+test("start-now handles an empty IMAP mailbox and fails closed if UIDNEXT is missing", async () => {
+  let query;
+  const p = createMailProviders({
+    imapFactory: () => ({
+      on() {},
+      async connect() {},
+      async mailboxOpen() {
+        return { uidValidity: 1n, uidNext: 1 };
+      },
+      async search(q) {
+        query = q;
+        return [];
+      },
+      async logout() {},
+      close() {},
+    }),
+  });
+  const c = {
+      provider: "yahoo",
+      address: "test@example.test",
+      appPassword: "fixture",
+    },
+    r = await p.startNow({}, c);
+  assert.equal(r.state.lastUid, 0);
+  await p.scan({ sync_state: r.state }, c);
+  assert.deepEqual(query, { uid: "1:*" });
+  const invalid = createMailProviders({
+    imapFactory: () => ({
+      on() {},
+      async connect() {},
+      async mailboxOpen() {
+        return { uidValidity: 1n };
+      },
+      async logout() {},
+      close() {},
+    }),
+  });
+  await assert.rejects(() => invalid.startNow({}, c), {
+    code: "MAIL_CURSOR_INVALID",
+  });
+});
+test("Outlook start-now verifies access without fetching mail and anchors future delta to activation time", async () => {
+  let mailQueries = 0;
+  await mockHttp(
+    async (url) => {
+      const u = new URL(url);
+      if (u.hostname === "login.microsoftonline.com")
+        return response({ access_token: "fixture", refresh_token: "rotated" });
+      if (u.pathname === "/v1.0/me")
+        return response({ mail: "test@example.test" });
+      if (u.pathname.endsWith("/mailFolders/inbox"))
+        return response({ id: "inbox" });
+      mailQueries++;
+      assert.equal(
+        u.searchParams.get("$filter"),
+        "receivedDateTime ge " + anchor,
+      );
+      return response({
+        value: [],
+        "@odata.deltaLink":
+          "https://graph.microsoft.com/v1.0/me/mailFolders/inbox/messages/delta?token=fixture",
+      });
+    },
+    async () => {
+      const p = createMailProviders();
+      const r = await p.startNow({}, outlook);
+      anchor = r.state.since;
+      assert.equal(mailQueries, 0);
+      const scanned = await p.scan({ sync_state: r.state }, r.credentials);
+      assert.equal(mailQueries, 1);
+      assert.equal(scanned.state.since, anchor);
+    },
+  );
+});
+let anchor;

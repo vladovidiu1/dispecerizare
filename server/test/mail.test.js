@@ -586,6 +586,68 @@ test("human can confirm a correct AI label without redispatch and direct classif
     count,
   );
 });
+test("start-now arms monitoring atomically without importing existing mail and persists the chosen baseline", async () => {
+  const originalStart = providers.startNow;
+  let calls = 0;
+  providers.startNow = async (row, c) => {
+    calls++;
+    return {
+      credentials: c,
+      state: {
+        startMode: "future",
+        since: "2026-10-18T15:00:00.000Z",
+        uidValidity: "1",
+        lastUid: 999,
+      },
+    };
+  };
+  try {
+    const before = (await db.query("SELECT count(*)::int n FROM messages"))
+      .rows[0].n;
+    const result = await request(
+      "/mail-connections/" + connectionId + "/start-now",
+      { method: "POST" },
+    );
+    assert.equal(result.status, 200);
+    assert.equal(
+      (await db.query("SELECT count(*)::int n FROM messages")).rows[0].n,
+      before,
+    );
+    const row = (
+      await db.query("SELECT * FROM mailbox_connections WHERE id=$1", [
+        connectionId,
+      ])
+    ).rows[0];
+    assert.equal(row.enabled, true);
+    assert.equal(row.sync_state.lastUid, 999);
+    assert.equal(row.last_attempt_at, null);
+    assert.equal(
+      (await service.list(org)).find((r) => r.id === connectionId).monitorFrom,
+      "2026-10-18T15:00:00.000Z",
+    );
+    assert.equal(
+      (
+        await request("/mail-connections/" + connectionId + "/start-now", {
+          method: "POST",
+        })
+      ).status,
+      409,
+    );
+    assert.equal(calls, 1);
+    assert.equal(
+      (
+        await request("/mail-connections/" + connectionId + "/start-now", {
+          method: "POST",
+          session: agentCookie,
+        })
+      ).status,
+      403,
+    );
+    await service.update(connectionId, org, { enabled: false });
+  } finally {
+    providers.startNow = originalStart;
+  }
+});
 test("monitoring settings persist; disconnect/removal keep imported history", async () => {
   await service.update(connectionId, org, { enabled: true, pollSeconds: 30 });
   assert.equal(

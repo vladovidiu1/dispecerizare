@@ -6,27 +6,27 @@ Toate rutele sunt sub `/api`. JSON UTF-8, identificatori UUID. Cookie-urile util
 
 `POST /auth/login` cu `{ "organizationId": "UUID", "email": "...", "password": "..." }` creează un cookie HttpOnly. `GET /auth/me` returnează utilizatorul; `POST /auth/logout` invalidează sesiunea. Pentru cereri din browser, păstrează aceeași origine și cookie-ul. Browserul nu primește cheia robotului la autentificare.
 
-| Metodă și rută                   | Utilizare                                                                            |
-| -------------------------------- | ------------------------------------------------------------------------------------ |
-| GET /health                      | Verifică și conexiunea la PostgreSQL; fără autentificare                             |
-| GET /skills                      | Competențe `{id,name}`; utilizator sau robot                                         |
-| POST /skills                     | Admin: `{name}`                                                                      |
-| GET /examples                    | Exemple `{id,skillId,subject,body}`, maximum 1000; utilizator sau robot              |
-| POST /examples                   | Admin: `{skillId,subject,body}`                                                      |
-| GET /agents                      | Utilizator: agenți, competențe, disponibilitate, capacitate, încărcare               |
-| POST /agents                     | Admin: `{name,email,password,skills:[UUID],capacity:20}`; parola ≥12 caractere       |
-| PATCH /agents/:id                | Admin: oricare dintre `{available,capacity,skills:[UUID]}`                           |
-| GET /mailboxes                   | Admin: adrese sursă `{id,provider,address}`                                          |
-| POST /mailboxes                  | Admin: `{provider:"outlook",address:"shared@example.com"}`; provider este text liber |
-| POST /keys                       | Admin: `{name:"Robot Ollama"}` → `{id,token}`; tokenul se returnează o singură dată  |
-| DELETE /keys/:id                 | Admin: revocă imediat cheia                                                          |
-| GET /messages?limit=100&offset=0 | `{items,total,limit,offset}`; limit 1–200; agentul vede doar mesajele proprii        |
-| PATCH /messages/:id              | `{status,assignedTo,skillId,priority}`; agentul poate modifica numai statusul        |
-| GET /messages/:id/history        | Evenimente în ordine cronologică, cu autor și datele schimbării                      |
-| GET /messages/:id/notes          | Note interne, autor și dată                                                          |
-| POST /messages/:id/notes         | `{body}`; salvează o notă internă, fără trimitere email                              |
+| Metodă și rută                   | Utilizare                                                                                               |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| GET /health                      | Verifică și conexiunea la PostgreSQL; fără autentificare                                                |
+| GET /skills                      | Competențe `{id,name}`; utilizator sau robot                                                            |
+| POST /skills                     | Admin: `{name}`                                                                                         |
+| GET /examples                    | Exemple `{id,skillId,subject,body}`, maximum 1000; utilizator sau robot                                 |
+| POST /examples                   | Admin: `{skillId,subject,body}`                                                                         |
+| GET /agents                      | Utilizator: agenți, competențe, disponibilitate, capacitate, încărcare                                  |
+| POST /agents                     | Admin: `{name,email,password,skills:[UUID],capacity:20}`; parola ≥12 caractere                          |
+| PATCH /agents/:id                | Admin: oricare dintre `{available,capacity,skills:[UUID]}`                                              |
+| GET /mailboxes                   | Admin: adrese sursă `{id,provider,address}`                                                             |
+| POST /mailboxes                  | Admin: `{provider:"outlook",address:"shared@example.com"}`; provider este text liber                    |
+| POST /keys                       | Admin: `{name:"Robot Ollama"}` → `{id,token}`; tokenul se returnează o singură dată                     |
+| DELETE /keys/:id                 | Admin: revocă imediat cheia                                                                             |
+| GET /messages?limit=100&offset=0 | `{items,total,limit,offset}`; limit 1–200; agentul vede doar mesajele proprii                           |
+| PATCH /messages/:id              | `{status,assignedTo,skillId,priority}`; agentul poate modifica starea sau competența unui mesaj propriu |
+| GET /messages/:id/history        | Evenimente în ordine cronologică, cu autor și datele schimbării                                         |
+| GET /messages/:id/notes          | Note interne, autor și dată                                                                             |
+| POST /messages/:id/notes         | `{body}`; salvează o notă internă, fără trimitere email                                                 |
 
-Statusuri: `Nou`, `În lucru`, `Rezolvat`. Priorități: `Scăzută`, `Medie`, `Ridicată`. `assignedTo:null` dezalocă mesajul; `skillId:null` elimină competența manuală. Repartizarea manuală nu șterge clasificarea originală. Actualizarea competenței nu declanșează automat o nouă repartizare: administratorul confirmă separat agentul.
+Statusuri: `Nou`, `În lucru`, `Rezolvat`. Priorități: `Scăzută`, `Medie`, `Ridicată`. `assignedTo:null` dezalocă mesajul; `skillId:null` elimină competența manuală. Repartizarea manuală nu șterge clasificarea originală. Schimbarea efectivă a competenței, fără `assignedTo` explicit, readuce taskul la `Nou`, elimină repartizarea anterioară și selectează automat un utilizator eligibil după competență, disponibilitate și capacitate, fără un apel AI. Lipsa unui agent eligibil lasă taskul nealocat cu eveniment `review_required`. Schimbarea către aceeași competență nu reia distribuirea. Agentul trebuie să aleagă o competență validă, nenulă, din aceeași firmă; nu poate schimba prioritatea sau alege responsabilul. Trimite corecția competenței separat de actualizarea stării. Administratorul poate trimite `skillId` și `assignedTo` împreună pentru o corecție și repartizare explicită, fără restricții de competență/disponibilitate/capacitate; ținta trebuie să fie activă și din aceeași firmă. Istoricul păstrează autorul corecției, vechiul/noul tag, starea și responsabilul. Mesajele rămase nealocate nu sunt redistribuite ulterior în fundal în această versiune.
 
 Administrează cheile dintr-un client API autentificat cu cookie sau din consola browserului autentificat folosind `fetch('/api/keys', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Robot'})})`. Păstrează tokenul doar în configurarea securizată a robotului. Nu îl include în repository, URL, loguri sau în variabile `VITE_*`. Baza de date păstrează numai hashul tokenului.
 

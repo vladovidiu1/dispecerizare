@@ -1544,3 +1544,11 @@ legend {
     flex-direction: column;
   }
 }
+.routing-hint {
+  font-size: 11px;
+  line-height: 1.8;
+  color: #95849f;
+  background: #faf7fd;
+  border-radius: 7px;
+  padding: 12px 15px;
+}

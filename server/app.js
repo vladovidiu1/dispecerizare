@@ -612,15 +612,28 @@ export function createApp(
       .parse(req.body);
     if (
       req.actor.role !== "admin" &&
-      Object.keys(b).some((k) => k !== "status")
+      Object.keys(b).some((k) => !["status", "skillId"].includes(k))
     )
-      throw fail(403, "Doar administratorul poate modifica repartizarea");
+      throw fail(
+        403,
+        "Agentul poate schimba doar starea sau competența unui mesaj propriu",
+      );
+    if (req.actor.role !== "admin" && b.skillId === null)
+      throw fail(400, "Alege o competență validă");
     await transaction(db, async (c) => {
       await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
         req.actor.org,
       ]);
       const m = await accessible(c, req.actor, req.params.id, true);
       if (b.skillId) await requireSkill(c, req.actor.org, b.skillId);
+      const retag = "skillId" in b && b.skillId !== m.skill_id;
+      const reroute = retag && !("assignedTo" in b);
+      if (reroute && "status" in b)
+        throw fail(
+          400,
+          "Schimbă competența separat de stare; taskul revine automat la Nou",
+        );
+
       if (
         b.assignedTo &&
         !(
@@ -653,6 +666,37 @@ export function createApp(
             { field: key, from: m[column], to: value, method: "manual" },
           );
         }
+      }
+      if (reroute) {
+        await c.query(
+          "UPDATE messages SET assigned_to=NULL,status='Nou',updated_at=now() WHERE id=$1",
+          [m.id],
+        );
+        const chosen = b.skillId
+          ? await eligibleAgent(c, req.actor.org, b.skillId)
+          : null;
+        if (chosen)
+          await c.query("UPDATE messages SET assigned_to=$1 WHERE id=$2", [
+            chosen.id,
+            m.id,
+          ]);
+        if (m.status !== "Nou")
+          await event(c, req.actor.org, m.id, req.actor, "updated", {
+            field: "status",
+            from: m.status,
+            to: "Nou",
+            method: "tag-change",
+          });
+        await event(c, req.actor.org, m.id, req.actor, "assigned", {
+          from: m.assigned_to,
+          to: chosen?.id || null,
+          method: "tag-change",
+          skillId: b.skillId,
+        });
+        if (!chosen)
+          await event(c, req.actor.org, m.id, req.actor, "review_required", {
+            reason: b.skillId ? "no_eligible_agent" : "unclassified",
+          });
       }
     });
     res.status(204).end();
@@ -707,12 +751,7 @@ async function classifyMessage(c, actor, id, cl) {
   await event(c, actor.org, id, actor, "classified", cl);
   let agent;
   if (cl.confidence >= 0.75) {
-    agent = (
-      await c.query(
-        `SELECT u.id FROM users u JOIN agent_skills a ON a.user_id=u.id WHERE u.organization_id=$1 AND a.skill_id=$2 AND u.active=true AND u.available=true AND (SELECT count(*) FROM messages WHERE assigned_to=u.id AND status<>'Rezolvat')<u.capacity ORDER BY (SELECT count(*) FROM messages WHERE assigned_to=u.id AND status<>'Rezolvat')::float/u.capacity, u.id LIMIT 1`,
-        [actor.org, cl.skillId],
-      )
-    ).rows[0];
+    agent = await eligibleAgent(c, actor.org, cl.skillId);
   }
   if (agent) {
     await c.query("UPDATE messages SET assigned_to=$1 WHERE id=$2", [
@@ -786,4 +825,13 @@ async function storeMessage(db, actor, b) {
     return id;
   });
   return { id, duplicate };
+}
+
+async function eligibleAgent(c, org, skillId) {
+  return (
+    await c.query(
+      `SELECT u.id FROM users u JOIN agent_skills a ON a.user_id=u.id WHERE u.organization_id=$1 AND a.skill_id=$2 AND u.active=true AND u.available=true AND (SELECT count(*) FROM messages WHERE assigned_to=u.id AND status<>'Rezolvat')<u.capacity ORDER BY (SELECT count(*) FROM messages WHERE assigned_to=u.id AND status<>'Rezolvat')::float/u.capacity, u.id LIMIT 1`,
+      [org, skillId],
+    )
+  ).rows[0];
 }

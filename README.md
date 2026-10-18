@@ -9,8 +9,8 @@ Interfață React și API Node.js/Express cu PostgreSQL pentru repartizarea emai
 - Mesaje persistente, deduplicare pe adresă sursă + identificator extern, note interne, stare, repartizare și corecție manuală a competenței.
 - Clasificare originală (model, versiune prompt, motiv, încredere) și istoric tranzacțional al modificărilor, cu autor și dată.
 - Repartizare automată: competență validă + încredere ≥ 0,75 + agent activ/disponibil sub capacitate. Se alege cea mai mică încărcare relativă la capacitate; egalitățile se rezolvă determinist după ID. Procesările din aceeași firmă sunt serializate tranzacțional pentru a respecta capacitatea.
-- Mesajele fără clasificare, cu încredere redusă sau fără agent eligibil rămân nealocate. Administratorul le poate repartiza manual, inclusiv peste capacitate (override explicit în istoric).
-- Agenții pot citi și actualiza starea/adăuga note doar la mesajele proprii. Administratorii gestionează firma lor. Cheile robotului permit ingestie și citirea competențelor/exemplelor, fără acces la conversațiile din interfață.
+- Mesajele fără clasificare, cu încredere redusă sau fără agent eligibil rămân nealocate. Administratorul le poate repartiza manual oricărui utilizator activ din aceeași firmă, indiferent de competențe, disponibilitate sau capacitate (override explicit în istoric).
+- Agenții pot citi, actualiza starea, adăuga note și corecta competența doar la mesajele proprii. Corectarea competenței reia distribuirea automată fără Ollama și readuce taskul la Nou; fără agent eligibil rămâne nealocat. Administratorii gestionează firma lor. Cheile robotului permit ingestie și citirea competențelor/exemplelor, fără acces la conversațiile din interfață.
 
 ## Pornire locală
 

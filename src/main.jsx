@@ -232,6 +232,12 @@ function App() {
       if ("agentId" in data) body.assignedTo = data.agentId || null;
       if ("skillId" in data) body.skillId = data.skillId || null;
       await api("/messages/" + id, { method: "PATCH", body });
+      if ("skillId" in data && role === "Agent") {
+        setSelected(null);
+        notify(
+          "Competența a fost schimbată. Taskul a revenit în distribuire, fără apel AI.",
+        );
+      }
       await refresh();
     } catch (e) {
       notify(e.message);
@@ -675,7 +681,7 @@ function App() {
                   <div className="detail-meta">
                     <span>
                       Competență:{" "}
-                      {backendEnabled && role === "Administrator" ? (
+                      {backendEnabled ? (
                         <select
                           aria-label="Competență mesaj"
                           value={current.skillId || ""}
@@ -683,7 +689,9 @@ function App() {
                             update(current.id, { skillId: e.target.value })
                           }
                         >
-                          <option value="">De verificat</option>
+                          <option value="" disabled={role !== "Administrator"}>
+                            De verificat
+                          </option>
                           {skills.map((s) => (
                             <option value={s.id} key={s.id}>
                               {s.name}
@@ -724,6 +732,17 @@ function App() {
                       </select>
                     </label>
                   </div>
+                  {backendEnabled && (
+                    <p className="routing-hint">
+                      Schimbarea competenței readuce taskul la „Nou” și îl
+                      repartizează automat după competență, disponibilitate și
+                      capacitate, fără Qwen. Dacă nu există agent eligibil,
+                      rămâne nealocat.
+                      {role === "Administrator"
+                        ? " Poți alege manual orice utilizator activ, indiferent de competențe sau capacitate."
+                        : ""}
+                    </p>
+                  )}
                   {current.replies?.map((r, i) => (
                     <div className="sent-reply" key={i}>
                       <strong>Maria Ionescu · Răspuns demonstrativ</strong>

@@ -631,3 +631,238 @@ test("manual local-AI flow uses firm configuration, persists failures, deduplica
     await new Promise((r) => s.close(r));
   }
 });
+
+test("agent retags own task with audited automatic routing, no model call, and admin can override any skill", async () => {
+  let aiCalls = 0;
+  const s = createApp(db, {
+    ollama: {
+      status: async () => ({ reachable: false }),
+      classify: async () => {
+        aiCalls++;
+        throw Error("Model must not be called");
+      },
+    },
+  }).listen(0, "127.0.0.1");
+  await new Promise((r) => s.once("listening", r));
+  const call = async (
+    path,
+    { body, cookie = adminCookie, method = body ? "POST" : "GET" } = {},
+  ) => {
+    const r = await fetch(
+      "http://127.0.0.1:" + s.address().port + "/api" + path,
+      {
+        method,
+        headers: { Cookie: cookie, "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      },
+    );
+    return { status: r.status, data: r.status === 204 ? null : await r.json() };
+  };
+  try {
+    const target = (await call("/skills", { body: { name: "Retag target" } }))
+        .data.id,
+      empty = (await call("/skills", { body: { name: "Retag empty" } })).data
+        .id;
+    const next = (
+      await call("/agents", {
+        body: {
+          name: "Retag Recipient",
+          email: "retag@example.test",
+          password,
+          skills: [target],
+          capacity: 1,
+        },
+      })
+    ).data.id;
+    const login = await fetch(
+      "http://127.0.0.1:" + s.address().port + "/api/auth/login",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          organizationId: org,
+          email: "agent@example.test",
+          password,
+        }),
+      },
+    );
+    const ownerCookie = login.headers.get("set-cookie").split(";")[0];
+    await call("/messages/" + message, {
+      method: "PATCH",
+      body: { assignedTo: agent, status: "În lucru" },
+    });
+    const classificationsBefore = (
+      await db.query(
+        "SELECT count(*)::int AS n FROM classifications WHERE message_id=$1",
+        [message],
+      )
+    ).rows[0].n;
+    assert.equal(
+      (
+        await call("/messages/" + message, {
+          method: "PATCH",
+          cookie: ownerCookie,
+          body: { skillId: target },
+        })
+      ).status,
+      204,
+    );
+    const {
+      rows: [m],
+    } = await db.query("SELECT * FROM messages WHERE id=$1", [message]);
+    assert.equal(m.skill_id, target);
+    assert.equal(m.assigned_to, next);
+    assert.equal(m.status, "Nou");
+    assert.equal(
+      (await call("/messages/" + message + "/history", { cookie: ownerCookie }))
+        .status,
+      404,
+    );
+    assert.equal(
+      (
+        await call("/messages/" + message, {
+          method: "PATCH",
+          cookie: ownerCookie,
+          body: { skillId: empty },
+        })
+      ).status,
+      404,
+    );
+    let events = (await call("/messages/" + message + "/history")).data;
+    const tag = events.findLast((e) => e.data.field === "skillId");
+    assert.equal(tag.actorName, "Agent Test");
+    assert.equal(tag.data.from, skill);
+    assert.equal(tag.data.to, target);
+    assert.equal(events.at(-1).data.method, "tag-change");
+    // An admin overrides skills, availability and capacity explicitly.
+    await call("/agents/" + admin, {
+      method: "PATCH",
+      body: { available: false, capacity: 1 },
+    });
+    assert.equal(
+      (
+        await call("/messages/" + message, {
+          method: "PATCH",
+          body: { assignedTo: admin },
+        })
+      ).status,
+      204,
+    );
+    assert.equal(
+      (
+        await db.query("SELECT assigned_to FROM messages WHERE id=$1", [
+          message,
+        ])
+      ).rows[0].assigned_to,
+      admin,
+    );
+    await call("/messages/" + message, {
+      method: "PATCH",
+      body: { assignedTo: agent },
+    });
+    assert.equal(
+      (
+        await call("/messages/" + message, {
+          method: "PATCH",
+          cookie: ownerCookie,
+          body: { assignedTo: next },
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await call("/messages/" + message, {
+          method: "PATCH",
+          cookie: ownerCookie,
+          body: { priority: "Ridicată" },
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await call("/messages/" + message, {
+          method: "PATCH",
+          cookie: ownerCookie,
+          body: { skillId: null },
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await call("/messages/" + message, {
+          method: "PATCH",
+          cookie: ownerCookie,
+          body: { skillId: empty, status: "Rezolvat" },
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await call("/messages/" + message, {
+          method: "PATCH",
+          cookie: ownerCookie,
+          body: { skillId: empty },
+        })
+      ).status,
+      204,
+    );
+    assert.equal(
+      (
+        await db.query("SELECT assigned_to FROM messages WHERE id=$1", [
+          message,
+        ])
+      ).rows[0].assigned_to,
+      null,
+    );
+    events = (await call("/messages/" + message + "/history")).data;
+    assert.equal(events.at(-1).type, "review_required");
+    assert.equal(events.at(-1).data.reason, "no_eligible_agent");
+    const foreign = (
+      await db.query("SELECT id FROM skills WHERE organization_id=$1 LIMIT 1", [
+        otherOrg,
+      ])
+    ).rows[0].id;
+    assert.equal(
+      (
+        await call("/messages/" + message, {
+          method: "PATCH",
+          body: { skillId: foreign },
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await call("/messages/" + message, {
+          method: "PATCH",
+          body: { skillId: target, assignedTo: admin },
+        })
+      ).status,
+      204,
+    );
+    assert.equal(
+      (
+        await db.query("SELECT assigned_to FROM messages WHERE id=$1", [
+          message,
+        ])
+      ).rows[0].assigned_to,
+      admin,
+    );
+    assert.equal(
+      (
+        await db.query(
+          "SELECT count(*)::int AS n FROM classifications WHERE message_id=$1",
+          [message],
+        )
+      ).rows[0].n,
+      classificationsBefore,
+    );
+    assert.equal(aiCalls, 0);
+  } finally {
+    await new Promise((r) => s.close(r));
+  }
+});

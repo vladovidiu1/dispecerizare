@@ -22,21 +22,13 @@ const ruleSchema = z
   .strict();
 export function registerWorkflows(
   app,
-  {
-    db,
-    human,
-    admin,
-    accessible,
-    ollama,
-    aiRunner,
-    knowledge = createKnowledge(db),
-  },
+  { db, human, admin, accessible, knowledge = createKnowledge(db) },
 ) {
   app.get("/api/messages/:id/conversation", human, async (req, res) => {
-    await accessible(db, req.actor, req.params.id);
+    const m = await accessible(db, req.actor, req.params.id);
     const entries = (
       await db.query(
-        `SELECT id,sender_name AS "senderName",sender_email AS "senderEmail",subject,body,received_at AS "receivedAt" FROM mail_entries WHERE organization_id=$1 AND message_id=$2 ORDER BY received_at,created_at,id`,
+        `SELECT id,sender_name AS "senderName",sender_email AS "senderEmail",subject,body,direction,received_at AS "receivedAt" FROM mail_entries WHERE organization_id=$1 AND message_id=$2 ORDER BY received_at,created_at,id`,
         [req.actor.org, req.params.id],
       )
     ).rows;
@@ -46,7 +38,29 @@ export function registerWorkflows(
         [req.actor.org, req.params.id],
       )
     ).rows;
+    const outgoing = (
+      await db.query(
+        `SELECT id,actor_id AS "actorId",from_address AS "fromAddress",to_address AS "toAddress",reply_to_address AS "replyToAddress",subject,body,state,last_error AS "lastError",created_at AS "createdAt",sent_at AS "sentAt" FROM outgoing_mail WHERE organization_id=$1 AND message_id=$2 ORDER BY created_at`,
+        [req.actor.org, req.params.id],
+      )
+    ).rows;
+    const initial = (
+      await db.query(
+        `SELECT e.sender_email,b.address,e.internet_message_id FROM mail_entries e JOIN mailboxes b ON b.id=e.mailbox_id WHERE e.organization_id=$1 AND e.message_id=$2 AND e.direction='inbound' ORDER BY e.received_at,e.created_at,e.id LIMIT 1`,
+        [req.actor.org, m.source_message_id || m.id],
+      )
+    ).rows[0];
     res.json({
+      replyContext: initial
+        ? {
+            to: initial.sender_email,
+            replyTo: initial.address,
+            canReply: /^<[^<>\s\r\n]+>$/.test(
+              initial.internet_message_id || "",
+            ),
+          }
+        : { canReply: false },
+      outgoing,
       entries: entries.map((e) => ({
         ...e,
         attachments: attachments.filter((a) => a.entryId === e.id),
@@ -112,25 +126,14 @@ export function registerWorkflows(
   app.get("/api/messages/:id/itl", human, async (req, res) => {
     const m = await accessible(db, req.actor, req.params.id);
     const sources = await knowledge.match(req.actor.org, m);
-    res.json({ sources: sources.map(({ body, score, ...s }) => s) });
+    res.json({ sources: sources.map(({ score, ...s }) => s) });
   });
-  app.post("/api/messages/:id/itl", human, async (req, res) => {
-    const m = await accessible(db, req.actor, req.params.id);
-    const sources = await knowledge.match(req.actor.org, m);
-    if (!sources.length) return res.json({ steps: [], sources: [] });
-    let answer;
-    try {
-      answer = await aiRunner.run(() =>
-        ollama.guide({ subject: m.subject, body: m.body, sources }),
-      );
-    } catch (e) {
-      if (e.code?.startsWith("OLLAMA_"))
-        return res.status(503).json({ error: e.message });
-      throw e;
-    }
-    await accessible(db, req.actor, req.params.id);
-    res.json({ ...answer, sources: sources.map(({ body, score, ...s }) => s) });
-  });
+  app.post("/api/messages/:id/itl", human, (req, res) =>
+    res.status(410).json({
+      error:
+        "Generarea AI nu este disponibilă. Consultă fragmentele ITL din task.",
+    }),
+  );
   app.get("/api/emma/rules", admin, async (req, res) =>
     res.json(
       (

@@ -29,7 +29,7 @@ import {
 import "./style.css";
 import { api, backendEnabled } from "./api";
 import Login from "./Login";
-import AiTest from "./AiTest";
+import DispatchRules from "./DispatchRules";
 import Mailboxes from "./Mailboxes";
 import WorkflowSettings from "./WorkflowSettings";
 import TaskResources from "./TaskResources";
@@ -243,7 +243,7 @@ function App() {
       if ("skillId" in data && role === "Agent") {
         setSelected(null);
         notify(
-          "Competența a fost schimbată. Taskul a revenit în distribuire, fără apel AI.",
+          "Competența a fost schimbată. Taskul a revenit în distribuire după competență.",
         );
       }
       await refresh();
@@ -333,8 +333,18 @@ function App() {
       return (
         skills.find((s) => s.id === h.data.skillId)?.name || "Fără competență"
       );
+    if (h.type === "assigned" && h.data.method === "handover")
+      return `${person(h.data.from)} → ${person(h.data.to)} · ${h.data.reason}`;
     if (h.type === "assigned")
-      return `${person(h.data.from)} → ${person(h.data.to)} · ${h.data.method === "manual" ? "manual" : "automat"}`;
+      return `${person(h.data.from)} → ${person(h.data.to)} · ${h.data.method === "manual" ? "manual" : h.data.method === "handover" ? "predare către coleg" : "automat"}`;
+    if (h.type === "resolution_added") return h.data.summary;
+    if (h.type === "rule_decision")
+      return h.data.outcome === "matched"
+        ? "Regulă aplicată"
+        : h.data.outcome === "ambiguous"
+          ? "Reguli contradictorii — verifică manual"
+          : "Nicio regulă aplicabilă";
+
     if (h.type === "classified")
       return `${skills.find((s) => s.id === h.data.skillId)?.name || "Competență"} · ${Math.round(h.data.confidence * 100)}% · ${h.data.model} · prompt ${h.data.promptVersion}${h.data.reason ? " · " + h.data.reason : ""}`;
     if (h.type === "review_required")
@@ -342,7 +352,10 @@ function App() {
         {
           low_confidence: "Încredere redusă în clasificare",
           no_eligible_agent: "Niciun agent eligibil disponibil",
-          unclassified: "Mesaj neclasificat",
+          unclassified: "În așteptarea regulilor",
+          awaiting_rules: "În așteptarea regulilor",
+          no_match: "Nicio regulă aplicabilă",
+          ambiguous: "Reguli contradictorii: verificare manuală",
         }[h.data.reason] || h.data.reason
       );
     if (h.data.field) {
@@ -369,10 +382,9 @@ function App() {
     ["overview", LayoutDashboard, "Privire de ansamblu"],
     ["inbox", Inbox, "Mesaje"],
     ["agents", Users, "Echipă & competențe"],
-    ["rules", SlidersHorizontal, "Reguli de distribuire"],
+    ["rules", SlidersHorizontal, "Reguli de dispecerizare"],
     ...(backendEnabled
       ? [
-          ["ai", Sparkles, "Test AI local"],
           ["mailboxes", Mail, "Căsuțe email"],
           ["workflows", Sparkles, "ITL & EMMA"],
         ]
@@ -410,9 +422,7 @@ function App() {
             .filter(
               (x) =>
                 role === "Administrator" ||
-                !["agents", "rules", "ai", "mailboxes", "workflows"].includes(
-                  x[0],
-                ),
+                !["agents", "rules", "mailboxes", "workflows"].includes(x[0]),
             )
             .map(([id, Icon, label]) => (
               <button
@@ -729,7 +739,15 @@ function App() {
                     <TaskResources
                       key={current.id}
                       id={current.id}
-                      version={current.receivedAt}
+                      version={current.updatedAt || current.receivedAt}
+                      team={team.filter(
+                        (u) => u.active !== false && u.id !== current.agentId,
+                      )}
+                      onChanged={refresh}
+                      onTransferred={async () => {
+                        setSelected(null);
+                        await refresh();
+                      }}
                       admin={role === "Administrator"}
                       notify={notify}
                     />
@@ -793,8 +811,7 @@ function App() {
                       {current.tagSource === "human" ? (
                         <span>
                           <Check size={14} />
-                          Tag confirmat de un om · folosit ca referință pentru
-                          clasificări viitoare
+                          Tag confirmat de un om · decizie păstrată în istoric
                         </span>
                       ) : (
                         <button
@@ -807,7 +824,7 @@ function App() {
                               );
                               await refresh();
                               notify(
-                                "Tag confirmat. Mesajul poate fi folosit ca exemplu pentru clasificările viitoare.",
+                                "Tag confirmat. Decizia umană este păstrată în istoric.",
                               );
                             } catch (e) {
                               notify(e.message);
@@ -824,8 +841,8 @@ function App() {
                     <p className="routing-hint">
                       Schimbarea competenței readuce taskul la „Nou” și îl
                       repartizează automat după competență, disponibilitate și
-                      capacitate, fără Qwen. Dacă nu există agent eligibil,
-                      rămâne nealocat.
+                      capacitate. Dacă nu există agent eligibil, rămâne
+                      nealocat.
                       {role === "Administrator"
                         ? " Poți alege manual orice utilizator activ, indiferent de competențe sau capacitate."
                         : ""}
@@ -841,20 +858,18 @@ function App() {
                         onClick={async () => {
                           try {
                             await api(
-                              "/messages/" +
-                                current.id +
-                                "/retry-classification",
+                              "/messages/" + current.id + "/redispatch",
                               { method: "POST" },
                             );
                             notify(
-                              "Mesajul a fost pus în coada de clasificare.",
+                              "Mesajul a fost pus în coada de aplicare a regulilor.",
                             );
                           } catch (e) {
                             notify(e.message);
                           }
                         }}
                       >
-                        Reîncearcă clasificarea în fundal
+                        Aplică din nou regulile
                       </button>
                     )}
                   {current.replies?.map((r, i) => (
@@ -915,14 +930,23 @@ function App() {
                               emma_created: "Task creat din Excel EMMA",
                               emma_imported: "Raport EMMA procesat",
                               emma_failed: "Import EMMA necesită verificare",
-                              classified: "Clasificat",
+                              rule_decision: "Reguli evaluate",
+                              dispatch_failed: "Distribuire nereușită",
+                              resolution_added: "Rezolvare documentată",
+                              reply_queued: "Răspuns pus în coadă",
+                              reply_sent: "Răspuns acceptat de furnizor",
+                              reply_failed: "Trimitere nereușită",
+                              reply_unknown:
+                                "Rezultat al trimiterii necunoscut",
+                              reply_reconciled: "Trimitere verificată manual",
+                              classified: "Clasificare istorică",
                               assigned: "Repartizat",
                               review_required: "Necesită verificare",
                               updated: "Actualizat",
                               note_added: "Notă adăugată",
                               tag_confirmed: "Tag confirmat de un om",
                               classification_discarded:
-                                "Rezultat AI ignorat: decizie umană prioritară",
+                                "Clasificare istorică ignorată: decizie umană prioritară",
                               classification_failed:
                                 "Clasificare locală nereușită",
                             }[h.type] || h.type}
@@ -1350,50 +1374,27 @@ function App() {
             <WorkflowSettings skills={skills} notify={notify} />
           ) : page === "mailboxes" ? (
             <Mailboxes />
-          ) : page === "ai" ? (
-            <AiTest
-              onOpen={async (id) => {
-                setOffset(0);
-                await refresh(0);
-                setSelected(id);
-                setPage("inbox");
-              }}
-            />
           ) : page === "rules" ? (
-            <section className="panel coming">
-              <span className="feature-icon">
-                <SlidersHorizontal size={28} />
-              </span>
-              <span className="eyebrow">DISTRIBUIRE DUPĂ COMPETENȚE</span>
-              <h1>Fiecare mesaj își găsește omul.</h1>
-              <p>
-                Distribuirea automată alege agenții disponibili cu competența
-                cerută și cele mai puține taskuri deschise, fără a depăși
-                capacitatea. Taskurile în așteptare sunt repartizate când se
-                eliberează un loc. Administratorul poate aloca manual oricui.
-              </p>
-              <div className="flow">
-                <span>
-                  <Mail size={20} />
-                  Email primit
-                </span>
-                <ChevronRight />
-                <span>
-                  <SlidersHorizontal size={20} />
-                  Competență identificată
-                </span>
-                <ChevronRight />
-                <span>
-                  <Users size={20} />
-                  Agent potrivit
-                </span>
-              </div>
-              <div className="info-note">
-                {backendEnabled
-                  ? "API-ul distribuie mesajele clasificate cu încredere de minimum 75% către agenți eligibili, disponibili și sub capacitate. Celelalte rămân nealocate pentru verificare. Competențele și capacitatea se configurează în Echipă & competențe; regulile pentru rapoarte Excel se găsesc în ITL & EMMA."
-                  : "Momentan construim interfața. Distribuirea automată va fi implementată în etapa următoare."}
-              </div>
-            </section>
+            backendEnabled ? (
+              <DispatchRules
+                skills={skills}
+                notify={notify}
+                onOpen={async (id) => {
+                  setOffset(0);
+                  await refresh(0);
+                  setSelected(id);
+                  setPage("inbox");
+                }}
+              />
+            ) : (
+              <section className="panel coming">
+                <h1>Reguli de dispecerizare</h1>
+                <p>
+                  Conectează backendul pentru a configura reguli și a distribui
+                  taskurile după competență și încărcare.
+                </p>
+              </section>
+            )
           ) : page === "settings" && backendEnabled ? (
             <SecuritySettings
               user={user}

@@ -50,23 +50,25 @@ Nu adăuga wildcarduri în origini și nu mări arbitrar TRUST_PROXY_HOPS pentru
 | Gmail/Yahoo refuză codul temporar     | Este necesară parola de aplicație, nu OTP-ul autentificatorului sau parola obișnuită                                 |
 | Conexiunea există, dar nu vine taskul | Verifică monitorizarea activă, Inbox, checkpointul, ultima sincronizare și coada; trimite după confirmarea start-now |
 
-O sincronizare reușită nu înseamnă clasificare finalizată. Mesajele mutate de reguli în alt folder pot să nu fie citite deoarece conectorul urmărește Inbox. Revocarea acordului la furnizor este separată de deconectarea locală.
+O sincronizare reușită nu înseamnă evaluarea regulilor finalizată. Mesajele mutate de reguli în alt folder pot să nu fie citite deoarece conectorul urmărește Inbox. Revocarea acordului la furnizor este separată de deconectarea locală.
 
-## Clasificare și distribuire
+## Reguli, distribuire și trimitere
 
-| Simptom                               | Verificare / acțiune                                                                                         |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Ollama nu răspunde                    | Verifică procesul, `ollama list`, modelul și OLLAMA_URL loopback                                             |
-| Modelul lipsește                      | Descarcă modelul aprobat cu `ollama pull qwen3:8b`; ecranul de stare nu îl instalează                        |
-| Primul răspuns este lent              | Încărcarea modelului și lipsa GPU pot dura; măsoară în mediul real și verifică timeoutul configurat          |
-| Model ocupat / `409`                  | Clasificarea și ITL sunt serializate; așteaptă, nu porni instanțe suplimentare pentru a forța paralelismul   |
-| `AI_SKILL_CONFIG`                     | Configurează 1–60 competențe pentru fluxul local curent                                                      |
-| `OLLAMA_UNCERTAIN` / rezultat invalid | Taskul rămâne pentru verificare; corectează tagul sau exemplele, nu presupune o alocare reușită              |
-| Tag bun, task nealocat                | Verifică încrederea, cont activ, skill, disponibilitate și capacitate                                        |
-| Task blocat după oprire brutală       | Lease-ul workerului poate dura 15 minute; manualul AI și coada persistentă au recuperări diferite            |
-| `403` / `409` la retry                | Taskul poate fi confirmat de om, alocat sau în altă stare; reîncercarea nu ocolește protecția deciziei umane |
+| Simptom                                  | Verificare                                                                                            |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Tag absent                               | Nicio regulă activă sau conflict între skilluri la aceeași prioritate; folosește preview și istoricul |
+| Tag bun, task nealocat                   | Cont activ, skill, disponibilitate și capacitate; workerele trebuie să ruleze                         |
+| Regulă modificată, task vechi neschimbat | Regulile nu mută taskuri deja alocate; reevaluează explicit numai taskuri eligibile                   |
+| Transfer fără colegi                     | Verifică utilizatorii activi ai organizației și reîncarcă lista                                       |
+| 409 la transfer/tag                      | Există un email sending; așteaptă finalizarea                                                         |
+| SEND_AUTH / MAIL_AUTH                    | Reautorizează contul de expediere și verifică Mail.Send/Conditional Access                            |
+| SEND_ACCOUNT_MISMATCH                    | Contul Microsoft trebuie să corespundă adresei personale configurate                                  |
+| SEND_VAULT                               | Restaurează cheia originală; nu o înlocui peste date criptate                                         |
+| SEND_UNKNOWN / SEND_INTERRUPTED          | Verifică expedierea la furnizor și înregistrează rezultatul; nu retrimite automat                     |
+| Reply blocat pentru task vechi           | Emailul inițial nu are Message-ID valid; nu se fabrică o referință                                    |
+| Sugestie absentă                         | Rezolvare partajată, task Rezolvat, skill și termeni comuni; căutarea nu este semantică               |
 
-Nu modifica în masă alocările în SQL pentru a echilibra echipa. Adminul poate redistribui explicit; automatizarea nu mută lucrările existente doar pentru egalizare.
+Codul AI este arhivat. Nu porni Ollama pentru remedierea acestui flux. Nu modifica în masă alocările sau outboxul în SQL. Vezi [reguli și colaborare](rules-and-collaboration.md).
 
 ## Documente și rapoarte
 

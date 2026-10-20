@@ -11,7 +11,6 @@ flowchart LR
   A[Browser agent] -->|HTTPS · TCP 443| P[Caddy · certificat intern]
   P -->|HTTP pe loopback| B[Relay · 127.0.0.1:3001]
   B --> D[PostgreSQL · local]
-  B --> Q[Ollama / Qwen · local]
   B -->|TLS validat| M[Furnizor email]
 ```
 
@@ -39,7 +38,7 @@ Nu trimite cheia privată, parole sau refresh tokenuri în chat, emailuri de sup
 
 ## Instalare Windows după ce există numele și certificatul
 
-Păstrează `.env` și `.relay` de la instalarea existentă. Actualizează fișierele din ZIP după backupul PostgreSQL și rulează `npm.cmd ci`. Nu rerula bootstrapul. Schimbările HTTPS/securitate nu necesită o migrare SQL suplimentară față de versiunea 003; dacă vii dintr-o versiune mai veche, rulează `npm.cmd run db:migrate`.
+Păstrează `.env` și `.relay` de la instalarea existentă. Actualizează fișierele din ZIP după backupul PostgreSQL și rulează `npm.cmd ci`. Nu rerula bootstrapul. Versiunea cu reguli și colaborare necesită migrarea 004: rulează `npm.cmd run db:migrate`, păstrând configurațiile private.
 
 1. IT furnizează un executabil Caddy 2 aprobat și actualizat. Acesta nu este inclus în ZIP. În testarea acestei configurații s-a folosit Caddy 2.11.7; pentru companie se folosește versiunea curentă acceptată de IT. Caddy nu găzduiește datele la un serviciu extern; rulează pe calculatorul aplicației. Dacă firma folosește deja IIS sau alt proxy, IT poate folosi acel proxy cu aceleași cerințe de loopback/origine/antete; nu seta automat TRUST_PROXY_HOPS la alt număr.
 2. Copiază `deploy/https.env.example` în `.relay/https.env`. Nu înlocui `.env` cu acest șablon. Fișierul suplimentar suprascrie setările de pornire relevante, păstrând conexiunea SQL și configurația existentă în `.env`.
@@ -82,7 +81,7 @@ npm.cmd run start:https
 npm.cmd run proxy:https
 ```
 
-Ollama și PostgreSQL rămân pornite local. Pentru această variantă nu se folosește Vite ca server pentru colegi. Terminalele sunt pentru pilot; pachetul nu instalează încă servicii Windows.
+PostgreSQL rămâne pornit local. Nu este necesar un motor AI. Pentru această variantă nu se folosește Vite ca server pentru colegi. Terminalele sunt pentru pilot; pachetul nu instalează încă servicii Windows.
 
 6. Deschide `https://NUMELE-DNS-APROBAT` de pe un PC agent. Browserul trebuie să accepte certificatul fără avertisment și să afișeze autentificarea. Nu continua prin ignorarea unui avertisment de certificat. Testează din segmentul real al colegilor, nu doar de pe server. IT configurează firewall-ul/Zscaler prin politica aprobată, nu prin dezactivarea protecțiilor.
 

@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { connectDb, migrate } from "../db.js";
 import { createApp } from "../app.js";
+import { createRuleService } from "../rules.js";
 import { hashPassword } from "../security.js";
 const url = process.env.TEST_DATABASE_URL;
 if (!url)
@@ -157,7 +158,10 @@ test("skills, examples, agent and mailbox configuration", async () => {
     })
   ).data.id;
   key = (
-    await request("/keys", { method: "POST", body: { name: "Ollama worker" } })
+    await request("/keys", {
+      method: "POST",
+      body: { name: "Ingestion worker" },
+    })
   ).data;
   assert.equal(
     (await request("/skills", { cookie: otherCookie })).data.length,
@@ -185,7 +189,7 @@ test("skills, examples, agent and mailbox configuration", async () => {
     })
   ).cookie;
 });
-const payload = (id, confidence = 0.95) => ({
+const payload = (id) => ({
   mailboxId: mailbox,
   externalId: id,
   senderName: "Client Test",
@@ -193,15 +197,14 @@ const payload = (id, confidence = 0.95) => ({
   subject: "Clarificare factură",
   body: "Vă rog detalii despre factură.",
   receivedAt: new Date().toISOString(),
-  classification: {
-    skillId: skill,
-    confidence,
-    model: "qwen:8b",
-    promptVersion: "v1",
-    reason: "Solicitare de facturare",
-  },
 });
-test("ingestion, routing, duplicate protection and original classification history", async () => {
+test("ingestion, rule routing, duplicate protection and decision history", async () => {
+  await createRuleService(db).save(org, {
+    name: "Facturi",
+    skillId: skill,
+    enabled: true,
+    conditions: [{ field: "subject", operator: "contains", value: "factură" }],
+  });
   const p = payload("external-1");
   const r = await request("/ingest", {
     method: "POST",
@@ -218,17 +221,18 @@ test("ingestion, routing, duplicate protection and original classification histo
   assert.equal(duplicate.status, 200);
   assert.equal(duplicate.data.id, message);
   assert.equal(duplicate.data.duplicate, true);
+  await createRuleService(db).process(org, message);
   const items = (await request("/messages")).data.items;
   assert.equal(items[0].agentId, agent);
   const history = (await request("/messages/" + message + "/history")).data;
   assert.deepEqual(
     history.map((h) => h.type),
-    ["received", "classified", "assigned"],
+    ["received", "review_required", "rule_decision", "assigned"],
   );
-  assert.equal(history[1].data.model, "qwen:8b");
+  assert.equal(history[2].data.outcome, "matched");
   assert.equal((await request("/messages", { bearer: key.token })).status, 403);
 });
-test("capacity and low-confidence leave messages in review queue", async () => {
+test("pending rule jobs leave messages in review until processed", async () => {
   await request("/ingest", {
     method: "POST",
     bearer: key.token,
@@ -337,6 +341,7 @@ test("concurrent ingestion respects capacity and idempotency", async () => {
     ),
   );
   assert.ok(results.every((r) => r.status === 201));
+  for (const r of results) await createRuleService(db).process(org, r.data.id);
   const rows = (
     await db.query(
       "SELECT count(*)::int AS n FROM messages WHERE assigned_to=$1 AND status<>'Rezolvat'",
@@ -352,9 +357,13 @@ test("concurrent ingestion respects capacity and idempotency", async () => {
   assert.deepEqual(duplicates.map((r) => r.status).sort(), [200, 201]);
   assert.equal(duplicates[0].data.id, duplicates[1].data.id);
 });
-test("invalid classification rolls back; key revocation and logout invalidate credentials", async () => {
+test("disabled classification payload is rejected; key revocation and logout invalidate credentials", async () => {
   const p = payload("invalid");
-  p.classification.skillId = randomUUID();
+  p.classification = {
+    skillId: randomUUID(),
+    confidence: 0.99,
+    model: "disabled",
+  };
   assert.equal(
     (await request("/ingest", { method: "POST", bearer: key.token, body: p }))
       .status,
@@ -403,14 +412,14 @@ test("database survives API restart and sessions keep their original authorizati
   );
   assert.ok(
     (await request("/messages/" + message + "/history")).data.some(
-      (h) => h.type === "classified",
+      (h) => h.type === "rule_decision",
     ),
   );
 });
 
-test("unavailable agents, low confidence with free capacity, and source-specific duplicate IDs", async () => {
-  const newKey = (
-    await request("/keys", { method: "POST", body: { name: "Queue tests" } })
+test("unavailable agents stay queued and duplicate IDs are mailbox scoped", async () => {
+  const k = (
+    await request("/keys", { method: "POST", body: { name: "Queue" } })
   ).data;
   await db.query(
     "UPDATE messages SET status='Rezolvat' WHERE organization_id=$1",
@@ -420,12 +429,13 @@ test("unavailable agents, low confidence with free capacity, and source-specific
     method: "PATCH",
     body: { available: false },
   });
-  let r = await request("/ingest", {
+  const r = await request("/ingest", {
     method: "POST",
-    bearer: newKey.token,
+    bearer: k.token,
     body: payload("unavailable"),
   });
   assert.equal(r.status, 201);
+  await createRuleService(db).process(org, r.data.id);
   assert.equal(
     (await request("/messages/" + r.data.id + "/history")).data.at(-1).data
       .reason,
@@ -435,65 +445,27 @@ test("unavailable agents, low confidence with free capacity, and source-specific
     method: "PATCH",
     body: { available: true },
   });
-  r = await request("/ingest", {
-    method: "POST",
-    bearer: newKey.token,
-    body: payload("low-free", 0.1),
-  });
-  assert.equal(
-    (await request("/messages/" + r.data.id + "/history")).data.at(-1).data
-      .reason,
-    "low_confidence",
-  );
-  const p = payload("unclassified");
-  delete p.classification;
-  r = await request("/ingest", {
-    method: "POST",
-    bearer: newKey.token,
-    body: p,
-  });
-  assert.equal(
-    (await request("/messages/" + r.data.id + "/history")).data.at(-1).data
-      .reason,
-    "unclassified",
-  );
-  const otherMailbox = (
+  const m = (
     await request("/mailboxes", {
       method: "POST",
-      body: { provider: "imap", address: "second@example.test" },
+      body: { provider: "gmail", address: "second@example.test" },
     })
   ).data.id;
-  const duplicate = payload("external-1");
-  duplicate.mailboxId = otherMailbox;
   assert.equal(
     (
       await request("/ingest", {
         method: "POST",
-        bearer: newKey.token,
-        body: duplicate,
+        bearer: k.token,
+        body: { ...payload("external-1"), mailboxId: m },
       })
     ).status,
     201,
   );
-  const foreignSkill = (
-    await request("/skills", {
-      cookie: otherCookie,
-      method: "POST",
-      body: { name: "Private skill" },
-    })
-  ).data.id;
-  const foreign = payload("cross-tenant");
-  foreign.classification.skillId = foreignSkill;
-  assert.equal(
-    (
-      await request("/ingest", {
-        method: "POST",
-        bearer: newKey.token,
-        body: foreign,
-      })
-    ).status,
-    400,
-  );
+  await request("/skills", {
+    method: "POST",
+    cookie: otherCookie,
+    body: { name: "Private skill" },
+  });
 });
 
 test("production requires HTTPS and sessions use Secure HttpOnly SameSite cookies", async () => {
@@ -538,102 +510,32 @@ test("production requires HTTPS and sessions use Secure HttpOnly SameSite cookie
   }
 });
 
-test("manual local-AI flow uses firm configuration, persists failures, deduplicates and restricts access", async () => {
-  let calls = 0,
-    captured,
-    mode = "success",
-    release;
-  const ai = {
-    status: async () => ({
-      reachable: true,
-      installed: true,
-      model: "fixture:8b",
-    }),
-    classify: async (input) => {
-      calls++;
-      captured = input;
-      if (mode === "wait")
-        await new Promise((r) => {
-          release = r;
-        });
-      if (mode === "fail")
-        throw Object.assign(new Error("private failure"), {
-          code: "OLLAMA_UNAVAILABLE",
-        });
-      return {
-        skillId: skill,
-        confidence: 0.95,
-        model: "fixture:8b",
-        promptVersion: "fixture-v1",
-        reason: "Facturare",
-      };
-    },
-  };
-  const s = createApp(db, { ollama: ai }).listen(0, "127.0.0.1");
-  await new Promise((r) => s.once("listening", r));
-  const call = async (path, body, cookie = adminCookie) => {
-    const r = await fetch(
-      "http://127.0.0.1:" + s.address().port + "/api" + path,
-      {
-        method: body ? "POST" : "GET",
-        headers: { Cookie: cookie, "Content-Type": "application/json" },
-        body: body ? JSON.stringify(body) : undefined,
+test("all former AI routes are disabled and never invoke injected model", async () => {
+  let calls = 0;
+  const s = createApp(db, {
+    ollama: {
+      status: async () => {
+        calls++;
       },
-    );
-    return { status: r.status, data: await r.json() };
-  };
-  const data = () => ({
-    requestId: randomUUID(),
-    senderName: "Client",
-    senderEmail: "client@example.test",
-    subject: "Factură",
-    body: "Detalii factură",
-  });
+      classify: async () => {
+        calls++;
+      },
+    },
+  }).listen(0, "127.0.0.1");
+  await new Promise((r) => s.once("listening", r));
   try {
-    await db.query(
-      "UPDATE messages SET status='Rezolvat' WHERE organization_id=$1",
-      [org],
-    );
-    assert.equal((await call("/ai/status")).data.installed, true);
-    const input = data(),
-      success = await call("/ai/test", input);
-    assert.equal(success.status, 201);
-    assert.equal(success.data.message.agentId, agent);
-    assert.equal(captured.skills.length, 1);
-    assert.equal(captured.skills[0].id, skill);
-    assert.ok(captured.examples.length > 0);
-    assert.equal((await call("/ai/test", input)).data.duplicate, true);
-    assert.equal(calls, 1);
-    mode = "fail";
-    const failure = await call("/ai/test", data());
-    assert.equal(failure.status, 201);
-    assert.equal(failure.data.message.agentId, null);
-    assert.ok(failure.data.warning);
-    const events = await db.query(
-      "SELECT type,data FROM message_events WHERE message_id=$1 ORDER BY id",
-      [failure.data.id],
-    );
-    assert.equal(events.rows.at(-1).type, "classification_failed");
-    assert.equal(events.rows.at(-1).data.reason, "OLLAMA_UNAVAILABLE");
-    const freshCookie = (
-      await request("/auth/login", {
-        method: "POST",
-        body: { organizationId: org, email: "agent@example.test", password },
-      })
-    ).cookie;
-    assert.equal((await call("/ai/test", data(), freshCookie)).status, 403);
-    assert.equal((await call("/ai/test", data(), otherCookie)).status, 201);
-    assert.ok(captured.skills.every((s) => s.id !== skill));
-    mode = "wait";
-    const pending = call("/ai/test", data());
-    for (let i = 0; i < 100 && !release; i++)
-      await new Promise((r) => setTimeout(r, 10));
-    assert.ok(release);
-    assert.equal((await call("/ai/test", data())).status, 409);
-    release();
-    assert.equal((await pending).status, 201);
+    for (const [path, method] of [
+      ["/ai/status", "GET"],
+      ["/ai/test", "POST"],
+    ]) {
+      const r = await fetch(
+        "http://127.0.0.1:" + s.address().port + "/api" + path,
+        { method, headers: { Cookie: adminCookie } },
+      );
+      assert.equal(r.status, 410);
+    }
+    assert.equal(calls, 0);
   } finally {
-    release?.();
     await new Promise((r) => s.close(r));
   }
 });

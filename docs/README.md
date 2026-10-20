@@ -6,10 +6,10 @@
 
 | Câmp                  | Valoare                                                                                   |
 | --------------------- | ----------------------------------------------------------------------------------------- |
-| Ediție documentație   | `1.0`                                                                                     |
-| Aplicație documentată | Relay `0.1.0`, stadiu pilot                                                               |
-| Data reviziei         | 18 octombrie 2026, Europe/Bucharest                                                       |
-| Referință tehnică     | Codul funcțional până la commitul `d529303`; schema SQL `003`                             |
+| Ediție documentație   | `1.1`                                                                                     |
+| Aplicație documentată | Relay `0.2.0`, stadiu pilot                                                               |
+| Data reviziei         | 20 octombrie 2026, Europe/Bucharest                                                       |
+| Referință tehnică     | Reguli și colaborare; schema SQL `004`                                                    |
 | Limba                 | Română; identificatorii tehnici păstrează forma din cod                                   |
 | Statut                | Descriere a implementării și proceduri pentru pilot; fără aprobare de producție implicită |
 
@@ -19,7 +19,7 @@ Documentația distinge funcțiile implementate de configurările care depind de 
 
 ### Agent
 
-Citește [manualul agentului](agent-guide.md). Primește de la administrator linkul, ID-ul organizației și propriul cont. Nu instalează PostgreSQL sau Ollama.
+Citește [manualul agentului](agent-guide.md). Primește de la administrator linkul, ID-ul organizației și propriul cont. Nu instalează PostgreSQL sau modele AI.
 
 ### Administrator de departament
 
@@ -39,7 +39,7 @@ Consultă [ghidul de dezvoltare](development.md), [referința API](api.md), [arh
 | ------------------------------------------------------- | --------------------------------------------------------------- |
 | [Prezentare funcțională](product-overview.md)           | Obiective, capabilități, reguli, termeni și limite              |
 | [Instalare Windows / Cloud PC](installation-windows.md) | Instalare nouă, configurare și prima verificare                 |
-| [Manual administrator](administrator-guide.md)          | Echipă, exemple, căsuțe, controlul distribuirii și conturi      |
+| [Manual administrator](administrator-guide.md)          | Echipă, reguli, căsuțe, controlul distribuirii și conturi       |
 | [Manual agent](agent-guide.md)                          | Autentificare, taskuri, note, taguri, atașamente și ITL         |
 | [Conectarea emailului](email-setup.md)                  | Outlook/Microsoft 365, shared mailbox, Gmail, Yahoo             |
 | [Workflow-uri locale](local-workflows.md)               | Conversații, distribuire, ITL, EMMA, limite și dashboarduri     |
@@ -63,3 +63,7 @@ Consultă [ghidul de dezvoltare](development.md), [referința API](api.md), [arh
 - Nu se includ în documentație parole, tokenuri, chei private, mesaje reale sau detalii de infrastructură confidențiale.
 
 La schimbarea comportamentului, se actualizează ghidul rolului afectat, API-ul dacă este cazul și istoricul. Rezultatele unui test se înregistrează cu versiunea codului și mediul folosit; documentația nu constituie singură dovadă de executare a procedurilor într-o instalare a clientului.
+
+## Schimbări ale ediției curente
+
+[Reguli, rezolvări, reply și transfer](rules-and-collaboration.md) descrie migrarea, configurația agentului Microsoft 365 și tratarea trimiterilor incerte. AI este dezactivat în toate fluxurile active; datele istorice sunt păstrate.

@@ -79,10 +79,12 @@ export async function requestDeviceCode(credentials) {
       body: new URLSearchParams({
         client_id: credentials.clientId,
         scope:
-          "offline_access https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.Read" +
-          (credentials.shared
-            ? " https://graph.microsoft.com/Mail.Read.Shared"
-            : ""),
+          credentials.purpose === "send"
+            ? "offline_access https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.Send"
+            : "offline_access https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.Read" +
+              (credentials.shared
+                ? " https://graph.microsoft.com/Mail.Read.Shared"
+                : ""),
       }),
     },
   );
@@ -161,6 +163,15 @@ function normalizeGraph(m) {
     externalId: m.id,
     threadId: m.conversationId || null,
     internetMessageId: m.internetMessageId || null,
+    inReplyTo:
+      (m.internetMessageHeaders || [])
+        .find((h) => h.name.toLowerCase() === "in-reply-to")
+        ?.value?.match(/<[^<>\s]{1,998}>/)?.[0] || null,
+    references: (
+      (m.internetMessageHeaders || [])
+        .find((h) => h.name.toLowerCase() === "references")
+        ?.value?.match(/<[^<>\s]{1,998}>/g) || []
+    ).slice(-100),
     senderName: m.from?.emailAddress?.name || "Expeditor necunoscut",
     senderEmail: m.from?.emailAddress?.address || "unknown@local.invalid",
     subject: (m.subject || "(Fără subiect)").slice(0, 2000),
@@ -322,7 +333,7 @@ async function imapMessage(client, box, uid, parseEmail) {
       meta.envelope?.date ||
       new Date()
     ).toISOString(),
-    skipAi: tooLarge,
+    skipDispatch: tooLarge,
   };
 }
 export function createMailProviders({
@@ -389,7 +400,7 @@ export function createMailProviders({
             "/mailFolders/inbox/messages/delta?" +
             new URLSearchParams({
               $select:
-                "id,conversationId,internetMessageId,hasAttachments,subject,body,from,receivedDateTime",
+                "id,conversationId,internetMessageId,internetMessageHeaders,hasAttachments,subject,body,from,receivedDateTime",
               $filter: "receivedDateTime ge " + since,
               $top: "5",
             });
@@ -457,7 +468,7 @@ export function createMailProviders({
             new URLSearchParams({
               $search: '"' + phrase + '"',
               $select:
-                "id,conversationId,internetMessageId,hasAttachments,subject,body,from,receivedDateTime",
+                "id,conversationId,internetMessageId,internetMessageHeaders,hasAttachments,subject,body,from,receivedDateTime",
               $top: "20",
             }),
           auth.accessToken,
@@ -499,7 +510,7 @@ export function createMailProviders({
                 graphPath(credentials) +
                   "/messages/" +
                   encodeURIComponent(id) +
-                  "?$select=id,conversationId,internetMessageId,hasAttachments,subject,body,from,receivedDateTime",
+                  "?$select=id,conversationId,internetMessageId,internetMessageHeaders,hasAttachments,subject,body,from,receivedDateTime",
                 auth.accessToken,
               ),
               credentials,

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { api } from "./api";
+import SenderSettings from "./SenderSettings";
 export default function SecuritySettings({ user, onSignedOut, notify }) {
   const [busy, setBusy] = useState(false),
     [users, setUsers] = useState([]),
@@ -92,6 +93,7 @@ export default function SecuritySettings({ user, onSignedOut, notify }) {
           </p>
         )}
       </section>
+      <SenderSettings user={user} notify={notify} />
       {user.role === "admin" && (
         <section className="panel workflow-panel">
           <h2>Accesul utilizatorilor</h2>

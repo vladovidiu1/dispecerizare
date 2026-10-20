@@ -18,53 +18,6 @@ export async function requireSkill(c, org, id) {
   )
     throw fail(400, "Competență invalidă");
 }
-export async function classifyMessage(c, actor, id, cl) {
-  const current = (
-    await c.query(
-      "SELECT tag_source FROM messages WHERE id=$1 AND organization_id=$2 FOR UPDATE",
-      [id, actor.org],
-    )
-  ).rows[0];
-  if (!current || current.tag_source === "human")
-    throw fail(409, "Decizia umană are prioritate față de AI");
-  await c.query(
-    "INSERT INTO classifications(id,organization_id,message_id,skill_id,confidence,model,prompt_version,reason) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
-    [
-      randomUUID(),
-      actor.org,
-      id,
-      cl.skillId,
-      cl.confidence,
-      cl.model,
-      cl.promptVersion,
-      cl.reason,
-    ],
-  );
-  await c.query(
-    "UPDATE messages SET tag_source='ai' WHERE id=$1 AND tag_source IS DISTINCT FROM 'human'",
-    [id],
-  );
-  await event(c, actor.org, id, actor, "classified", cl);
-  let agent;
-  if (cl.confidence >= 0.75) {
-    agent = await eligibleAgent(c, actor.org, cl.skillId);
-  }
-  if (agent) {
-    await c.query("UPDATE messages SET assigned_to=$1 WHERE id=$2", [
-      agent.id,
-      id,
-    ]);
-    await event(c, actor.org, id, actor, "assigned", {
-      from: null,
-      to: agent.id,
-      method: "skill-and-capacity",
-    });
-  } else
-    await event(c, actor.org, id, actor, "review_required", {
-      reason: cl.confidence < 0.75 ? "low_confidence" : "no_eligible_agent",
-    });
-}
-
 export async function storeMessage(db, actor, b) {
   return transaction(db, async (c) => {
     await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
@@ -92,12 +45,36 @@ export async function storeMessage(db, actor, b) {
         duplicate: true,
         updated: existing.root_external_id !== b.externalId,
       };
+    if (b.internetMessageId) {
+      const sent = (
+        await c.query(
+          "SELECT message_id FROM outgoing_mail WHERE organization_id=$1 AND internet_message_id=$2 AND state IN ('sent','sending','unknown')",
+          [actor.org, b.internetMessageId],
+        )
+      ).rows[0];
+      if (sent)
+        return {
+          id: sent.message_id,
+          entryId: null,
+          duplicate: true,
+          updated: true,
+        };
+    }
     // Only provider conversation IDs or RFC reply headers join tasks. Subject alone never does.
     const refs = [b.inReplyTo, ...(b.references || [])]
       .filter(Boolean)
       .slice(-100);
     let prior;
-    if (b.taskKind !== "emma") {
+    if (b.inReplyTo) {
+      const direct = (
+        await c.query(
+          "SELECT DISTINCT m.id FROM messages m JOIN mail_entries e ON e.message_id=m.id WHERE m.mailbox_id=$1 AND e.internet_message_id=$2 LIMIT 2",
+          [b.mailboxId, b.inReplyTo],
+        )
+      ).rows;
+      if (direct.length === 1) prior = direct[0];
+    }
+    if (!prior && b.taskKind !== "emma") {
       const matches = (
         await c.query(
           `SELECT DISTINCT m.id FROM messages m LEFT JOIN mail_entries e ON e.message_id=m.id
@@ -108,8 +85,6 @@ export async function storeMessage(db, actor, b) {
       // Ambiguous references require a separate task rather than merging unrelated work.
       if (matches.length === 1) prior = matches[0];
     }
-    if (b.classification)
-      await requireSkill(c, actor.org, b.classification.skillId);
     const id = prior?.id || randomUUID(),
       entryId = randomUUID();
     if (prior) {
@@ -144,7 +119,7 @@ export async function storeMessage(db, actor, b) {
           b.body,
           b.receivedAt,
           b.priority || "Medie",
-          b.classification?.skillId || b.skillId || null,
+          b.skillId || null,
           b.taskKind || "email",
           b.sourceMessageId || null,
           b.emmaCode || null,
@@ -200,12 +175,9 @@ export async function storeMessage(db, actor, b) {
         mailboxId: b.mailboxId,
         externalId: b.externalId,
       });
-      if (b.classification)
-        await classifyMessage(c, actor, id, b.classification);
-      else
-        await event(c, actor.org, id, actor, "review_required", {
-          reason: "unclassified",
-        });
+      await event(c, actor.org, id, actor, "review_required", {
+        reason: "awaiting_rules",
+      });
     }
     return { id, entryId, duplicate: false, updated: !!prior };
   });
@@ -234,7 +206,7 @@ export async function distributeWaiting(db) {
       ]);
       const waiting = (
         await c.query(
-          `SELECT m.* FROM messages m WHERE m.organization_id=$1 AND m.assigned_to IS NULL AND m.status='Nou' AND m.skill_id IS NOT NULL AND (m.tag_source='human' OR m.task_kind='emma' OR (SELECT confidence FROM classifications WHERE message_id=m.id ORDER BY created_at DESC LIMIT 1)>=0.75) AND EXISTS(SELECT 1 FROM users u JOIN agent_skills a ON a.user_id=u.id WHERE u.organization_id=m.organization_id AND a.skill_id=m.skill_id AND u.active AND u.available AND (m.emma_code IS NULL OR m.emma_code=ANY(u.emma_codes)) AND (SELECT count(*) FROM messages load WHERE load.assigned_to=u.id AND load.status<>'Rezolvat')<u.capacity) ORDER BY m.received_at,m.id LIMIT 100`,
+          `SELECT m.* FROM messages m WHERE m.organization_id=$1 AND m.assigned_to IS NULL AND m.status='Nou' AND m.skill_id IS NOT NULL AND (m.tag_source IN ('human','rule') OR m.task_kind='emma') AND EXISTS(SELECT 1 FROM users u JOIN agent_skills a ON a.user_id=u.id WHERE u.organization_id=m.organization_id AND a.skill_id=m.skill_id AND u.active AND u.available AND (m.emma_code IS NULL OR m.emma_code=ANY(u.emma_codes)) AND (SELECT count(*) FROM messages load WHERE load.assigned_to=u.id AND load.status<>'Rezolvat')<u.capacity) ORDER BY m.received_at,m.id LIMIT 100`,
           [org],
         )
       ).rows;

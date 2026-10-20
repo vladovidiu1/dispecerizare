@@ -21,24 +21,24 @@ Fișierele din `dist` pot fi reconstruite din cod. Un ZIP GitHub nu conține baz
 
 ## 2. Pornire și oprire controlată
 
-| Profil                           | Procese                                                                                                  |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Dezvoltare locală                | PostgreSQL, Ollama, `npm.cmd run api`, `npm.cmd run dev -- --host 127.0.0.1 --port 5173 --strictPort`    |
-| Interfață compilată HTTP de test | PostgreSQL, Ollama, `npm.cmd run build`, apoi `npm.cmd run start:local` cu originea și gazda configurate |
-| HTTPS corporativ                 | PostgreSQL, Ollama, `npm.cmd run start:https`, `npm.cmd run proxy:https` după validarea profilului       |
+| Profil                           | Procese                                                                                          |
+| -------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Dezvoltare locală                | PostgreSQL, `npm.cmd run api`, `npm.cmd run dev -- --host 127.0.0.1 --port 5173 --strictPort`    |
+| Interfață compilată HTTP de test | PostgreSQL, `npm.cmd run build`, apoi `npm.cmd run start:local` cu originea și gazda configurate |
+| HTTPS corporativ                 | PostgreSQL, `npm.cmd run start:https`, `npm.cmd run proxy:https` după validarea profilului       |
 
 Nu porni simultan profilele pe același port. `start:local` nu compilează automat interfața. Profilul HTTPS folosește [configurația dedicată](corporate-https.md), nu Vite pentru agenți.
 
 La oprire planificată, anunță utilizatorii, oprește intrarea prin proxy și închide backendul controlat cu Ctrl+C. Backendul încearcă să încheie operațiile active; nu închide forțat imediat terminalul dacă încă procesează. Apoi pot fi oprite componentele conform procedurii operatorului. Nu există un buton general de mentenanță în aplicație.
 
-La restart, pornește SQL și Ollama, apoi backendul și proxy-ul. Conexiunile email activate își reiau monitorizarea de la checkpoint; nu se cere loginul administratorului pentru pornirea workerelor. Un job abandonat poate aștepta expirarea lease-ului de 15 minute. O întrerupere brutală nu dovedește că toate tranzacțiile externe s-au încheiat.
+La restart, pornește SQL, apoi backendul și proxy-ul. Conexiunile email activate își reiau monitorizarea de la checkpoint; nu se cere loginul administratorului pentru pornirea workerelor. Un job abandonat poate aștepta expirarea lease-ului de 2 minute. O întrerupere brutală nu dovedește că toate tranzacțiile externe s-au încheiat.
 
 ## 3. Verificări operaționale
 
 - Verifică serviciile/procesele și accesul la pagina aplicației.
 - `/api/health` confirmă SQL, nu sănătatea modelului, conectorului sau distribuirii.
 - În Căsuțe email, verifică ultima sincronizare, erorile și coada.
-- În Test AI local, verifică modelul fără a crea repetat taskuri de test inutile.
+- Verifică regulile și stările outboxului; clarifică mesajele unknown înainte de retrimitere.
 - Controlează taskurile nealocate, rapoartele EMMA eșuate, capacitatea, spațiul pe disc și expirarea certificatului.
 - Verifică execuția backupului și testează periodic restaurarea conform politicii organizației.
 
@@ -120,7 +120,7 @@ După mutare, validează gazda, DNS/TLS, ACL, modelul și accesul la furnizor. D
 
 | Incident                     | Acțiune controlată                                                                                       |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Ollama oprit                 | Păstrează SQL, verifică serviciul/modelul; reîncearcă numai taskurile eligibile                          |
+| Răspuns unknown              | Verifică trimiterea în sistemul de email, apoi consemnează rezultatul; fără retry automat                |
 | Cheie email pierdută         | Restaurează cheia potrivită sau elimină/recreează conexiunea și autorizează din nou; nu șterge taskurile |
 | Cont compromis               | Dezactivează contul, păstrează evidențele, evaluează sesiunile și cheile API separat                     |
 | Credențiale email compromise | Oprește monitorizarea, revocă accesul la furnizor, reconectează cu acordul IT                            |
@@ -131,3 +131,7 @@ După mutare, validează gazda, DNS/TLS, ACL, modelul și accesul la furnizor. D
 ## 9. Oprire definitivă
 
 Oprește monitorizarea și procesele, revocă acordurile/tokenurile la furnizori și cheile API necesare, retrage accesul DNS/rețea și aplică politica de păstrare/ștergere inclusiv asupra backupurilor. Eliminarea configurației din UI nu revocă automat acordul OAuth extern și nu șterge arhiva.
+
+## Outbox și restaurare
+
+Migrarea 004 introduce expediere reală. Baza restaurată include emailuri queued; pornește copiile de test izolate de furnizori, altfel pot trimite mesaje. Nu șterge sau reseta în masă outboxul. Pentru stări unknown folosește verificarea și reconcilierea documentată în [reguli și colaborare](rules-and-collaboration.md). Păstrează conturile, revision și requestId împreună cu istoricul. La oprirea planificată, oprește preluarea de emailuri și așteaptă finalizarea trimiterilor.

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Sparkles, RefreshCw, ArrowUpRight } from "lucide-react";
-import { api } from "./api";
+import { api } from "../../../src/api";
 export default function AiTest({ onOpen }) {
   const [status, setStatus] = useState(null),
     [busy, setBusy] = useState(false),

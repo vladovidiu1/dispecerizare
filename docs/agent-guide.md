@@ -11,7 +11,7 @@ Primești de la administrator:
 - emailul contului Relay;
 - parola inițială transmisă prin canalul aprobat.
 
-Deschide linkul în browser și completează cele trei câmpuri de autentificare. Contul Relay nu este automat contul Microsoft al companiei. Nu trebuie să instalezi Ollama sau PostgreSQL pe calculatorul tău.
+Deschide linkul în browser și completează cele trei câmpuri de autentificare. Contul Relay nu este automat contul Microsoft al companiei. Nu trebuie să instalezi modele AI sau PostgreSQL pe calculatorul tău.
 
 Dacă browserul afișează un avertisment de certificat, anunță administratorul/IT. ID-ul organizației nu este o parolă; accesul este acordat prin cont și rol. Sesiunea curentă are o durată de 8 ore; expirarea ei necesită autentificare din nou.
 
@@ -29,23 +29,23 @@ Dacă browserul afișează un avertisment de certificat, anunță administratoru
 4. Adaugă o notă internă dacă trebuie consemnată o verificare sau o decizie.
 5. Treci în **Rezolvat** după încheierea tratării, conform regulilor departamentului.
 
-Schimbarea stării nu trimite un răspuns expeditorului. O notă salvată rămâne în aplicație; nu este email. Trimiterea răspunsurilor din Relay nu este implementată.
+Schimbarea stării nu trimite un răspuns expeditorului. O notă salvată rămâne în aplicație; nu este email. Folosește butonul **Răspunde prin email** pentru a trimite efectiv un răspuns; nota internă rămâne separată.
 
 Un email nou din conversație este adăugat aceluiași task atunci când identificatorii permit asocierea. Dacă taskul era rezolvat, poate reveni la Nou. Agentul și competența se păstrează. Aplicația monitorizează Inbox, nu Sent.
 
 ## 4. Verificarea sau corectarea competenței
 
-Dacă tagul este corect, poți apăsa **Confirmă tagul ca fiind corect**. Confirmarea nu mută taskul; furnizează o referință verificată pentru clasificările viitoare.
+Dacă tagul este corect, poți apăsa **Confirmă tagul ca fiind corect**. Confirmarea nu mută taskul; păstrează decizia umană în istoric.
 
 Dacă tagul este greșit:
 
 1. Alege competența potrivită din selectorul taskului.
 2. Așteaptă confirmarea salvării.
-3. Taskul revine la Nou și este redistribuit automat, fără un nou apel Qwen.
+3. Taskul revine la Nou și este redistribuit automat, după competență și încărcare.
 
 Poate dispărea din lista ta deoarece a fost alocat altui agent sau a rămas nealocat pentru verificare. Acesta este comportamentul așteptat, nu pierderea taskului. Selectarea aceleiași competențe confirmă tagul, fără redistribuire.
 
-Agentul nu poate alege arbitrar alt responsabil sau modifica prioritatea prin API. Pentru excepții, solicită intervenția administratorului.
+Pentru predarea parțială, folosește **Transferă unui coleg** și completează ce ai făcut și ce rămâne. Poți alege un coleg activ din organizație, indiferent de skill; verifică încărcarea lui. Tagul se păstrează, starea devine Nou, iar vechiul responsabil pierde accesul dacă este agent. Prioritatea rămâne în controlul administratorului.
 
 ## 5. Atașamente
 
@@ -55,11 +55,17 @@ Un fișier poate lipsi din cauza limitei de import, a tipului nesuportat sau fii
 
 ## 6. Asistență din ITL
 
-Butonul **Cum să rezolv** se activează când există fragmente cu termeni relevanți în biblioteca ITL indexată. La apăsare, modelul local propune pași cu documentul, pagina și citatul aferent.
+Butonul **Cum să rezolv** afișează fragmente ITL și rezolvări partajate ale unor taskuri rezolvate, găsite prin căutare lexicală SQL. Nu generează pași și nu folosește AI. Verifică documentul și aplicabilitatea procedurii.
 
-Verifică dacă procedura se aplică exact cazului, inclusiv condițiile, aprobările și avertismentele din document. Un citat verificabil nu garantează că interpretarea AI este corectă. Aplicația nu execută pașii automat. Dacă nu găsește o procedură suficientă, consultă documentul sau cere ajutor.
+Cu **Cum am rezolvat**, completează rezumatul și pașii efectuați. Poți marca taskul Rezolvat la salvare și alege dacă procedura devine exemplu pentru colegi după rezolvarea taskului. Scrie fără parole, date personale sau informații specifice clientului. O rezolvare nepartajată rămâne doar în task. Consemnările sunt păstrate, fără editare sau ștergere prin interfață.
 
-Dacă modelul este ocupat, așteaptă și încearcă din nou. Clasificarea și asistența ITL folosesc același motor local.
+### Răspuns din contul Microsoft 365
+
+În **Setări → Adresa mea de expediere**, salvează adresa personală, Application/Client ID și Tenant ID aprobate, apoi autorizează contul Microsoft. Permisiunile delegate necesare sunt User.Read și Mail.Send, plus offline_access; IT poate impune acord sau restricții de acces.
+
+În task, apasă **Răspunde prin email**. Verifică expeditorul, destinatarul fix și textul. Răspunsul se trimite către expeditorul emailului inițial, din contul tău autorizat. Reply-To este căsuța monitorizată; antetele In-Reply-To/References păstrează referința inițială. Gruparea vizuală în clientul destinatarului depinde și de furnizor. Nu poți schimba destinatarii, atașa fișiere sau adăuga CC/BCC în această versiune.
+
+**Acceptat de furnizor** nu garantează livrarea. Dacă apare **Rezultat necunoscut**, verifică în contul expeditorului sau cu IT și înregistrează rezultatul și dovada în task. Aplicația nu retrimite automat un email incert. Nu confirma „nu a fost trimis” fără verificare: poate produce un duplicat la retrimiterea explicită. Pentru mesaje vechi fără Message-ID, trimiterea este blocată.
 
 ## 7. Taskuri EMMA
 

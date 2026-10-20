@@ -45,7 +45,7 @@ Nu pune în fișa distribuită parole, tokenuri, chei sau conținutul neanonimiz
 | F06 | Retrimiterea aceluiași identificator de email                                  | Nu apare al doilea task/intrare pentru același email                                         |
 | F07 | 20 solicitări, doi agenți cu același skill, liberi și cu capacitate suficientă | Distribuție 10/10 în condițiile testului, fără alte sarcini concurente                       |
 | F08 | Agent plin sau indisponibil                                                    | Nu primește automat task nou; cele eligibile așteaptă și pot fi repartizate când apare loc   |
-| F09 | Tag greșit corectat de agent                                                   | Confirmare umană, stare Nou și redistribuire fără reclasificare Qwen                         |
+| F09 | Tag greșit corectat de agent                                                   | Confirmare umană, stare Nou și redistribuire după skill și încărcare                         |
 | F10 | Admin alocă în afara skillului/capacității                                     | Override permis către cont activ; intervenția apare în istoric                               |
 | F11 | Reply la emailul cunoscut, inclusiv task rezolvat                              | Conversație completată; taskul poate fi redeschis, păstrând agentul/tagul                    |
 | F12 | Email nou cu același subiect, fără referințe                                   | Nu este unit doar pe baza subiectului                                                        |
@@ -71,11 +71,11 @@ Nu pune în fișa distribuită parole, tokenuri, chei sau conținutul neanonimiz
 | O07 | Test după modificarea IP-ului prin procedura IT | Numele DNS aprobat continuă să indice serviciul, fără schimbarea linkului agenților |
 | O08 | Logout administrator                            | Monitorizarea continuă dacă procesele/gazda rămân pornite                           |
 
-## 6. Evaluarea clasificării și ITL
+## 6. Evaluarea regulilor și ITL
 
 Setul de evaluare trebuie să includă clase apropiate, mesaje ambigue, lipsa unei competențe, citate în email, mesaje lungi și exemple în afara domeniului. Etichetele corecte sunt stabilite de oameni înainte de rulare. Separă rezultatele pe skill, nu doar media generală.
 
-Înregistrează: tag corect/greșit, alocat/nealocat, corecție necesară, cazuri trimise automat greșit, latență de import/clasificare și explicațiile erorilor. Pentru ITL, verifică documentul/pagina/citatul, aplicabilitatea pașilor și condițiile omise. Un răspuns fluent nu este criteriu de corectitudine.
+Înregistrează: tag corect/greșit, alocat/nealocat, corecție necesară, cazuri trimise automat greșit, latență de import/evaluare a regulilor și explicațiile erorilor. Pentru ITL, verifică documentul/pagina/citatul, aplicabilitatea pașilor și condițiile omise. Sugestiile sunt documentate de oameni și găsite lexical; nu sunt generate de model.
 
 Nu sunt impuse aici procente de acceptare inventate. Departamentul și Cyber Security stabilesc pragurile înainte de test. Încrederea modelului nu este o probabilitate calibrată și nu se folosește singură ca dovadă de calitate.
 
@@ -84,3 +84,11 @@ Nu sunt impuse aici procente de acceptare inventate. Departamentul și Cyber Sec
 Înregistrează pentru fiecare scenariu: Executat / Neexecutat, Trecut / Eșuat / Blocat, evidența anonimizată, problema asociată și responsabilul. Elementele neexecutate nu se marchează drept trecute.
 
 Extinderea pilotului necesită rezolvarea blocajelor critice, procedură manuală de rezervă, responsabil de operare și acordurile cerute de organizație. Trecerea în producție este o decizie separată, documentată de persoanele autorizate. Faptul că acest plan există nu reprezintă acceptanță semnată.
+
+## 8. Scenarii suplimentare 0.2.0
+
+Validează conflict de reguli cu skilluri diferite, absența potrivirii, modificare/oprire regulă, distribuire echilibrată și prioritatea tagului uman. Verifică păstrarea exemplelor și clasificărilor vechi după migrarea 004 și funcționarea fără Ollama pornit.
+
+Cu doi agenți, salvează rezolvări publicate/private și verifică sugestiile numai pentru cele partajate, pe taskuri rezolvate. Predă un task parțial și verifică motivul, accesul noului responsabil și pierderea accesului vechiului agent.
+
+Cu conturi de test aprobate, autorizează adresa personală Microsoft 365, trimite reply, verifică In-Reply-To/References, destinatarul inițial, Reply-To shared și revenirea clientului în același task. Testează refuzul de autorizare, timeoutul și reconcilierea unknown fără retry automat. Nu simula incidente pe conturi de producție fără procedura IT.

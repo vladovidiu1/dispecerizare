@@ -1,11 +1,11 @@
-import { transaction } from "./db.js";
+import { classifyMessage } from "./classification.js";
+import { transaction } from "../../../server/db.js";
 import { getContext } from "./context.js";
 import {
   event,
   requireSkill,
-  classifyMessage,
   distributeWaiting,
-} from "./messages.js";
+} from "../../../server/messages.js";
 export function createAiRunner(db, ollama) {
   let busy = false;
   return {

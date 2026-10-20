@@ -14,7 +14,8 @@ import { createMailService } from "../mail-service.js";
 import { createVault } from "../vault.js";
 import { hashPassword } from "../security.js";
 import { readWorkbook, rowsFromSheet } from "../excel.js";
-import { createAiRunner } from "../ai-runner.js";
+import { classifyMessage } from "../../archive/ai/server/classification.js";
+import { createRuleService } from "../rules.js";
 const root = connectDb(process.env.TEST_DATABASE_URL),
   schema = "workflows_" + randomUUID().replaceAll("-", ""),
   org = randomUUID(),
@@ -69,7 +70,7 @@ async function request(
   };
 }
 async function save(input = {}) {
-  return storeMessage(
+  const result = await storeMessage(
     db,
     { org, type: "system" },
     {
@@ -84,6 +85,24 @@ async function save(input = {}) {
       ...input,
     },
   );
+  // Seed a historical classification to verify upgrades preserve its data and assignments.
+  if (input.classification)
+    await transaction(db, async (c) => {
+      await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
+        org,
+      ]);
+      await c.query("UPDATE messages SET skill_id=$1 WHERE id=$2", [
+        input.classification.skillId,
+        result.id,
+      ]);
+      await classifyMessage(
+        c,
+        { org, type: "system" },
+        result.id,
+        input.classification,
+      );
+    });
+  return result;
 }
 export function fixturePdf(
   text = "Resetare parola cont utilizator. Verifica identitatea si contractul. Deschide ecranul Resetare parola. Confirma modificarea.",
@@ -376,6 +395,9 @@ test("waiting queue assigns without AI when capacity becomes available; low conf
         reason: "",
       },
     });
+  await db.query("UPDATE messages SET tag_source='human' WHERE id=$1", [
+    good.id,
+  ]);
   await distributeWaiting(db);
   assert.equal(
     (await db.query("SELECT assigned_to FROM messages WHERE id=$1", [good.id]))
@@ -450,9 +472,9 @@ test("PDF upload, duplicate detection, page-aware local retrieval, guidance and 
     body: {},
     cookie: agentCookie,
   });
-  assert.equal(answer.status, 200, JSON.stringify(answer.data));
-  assert.equal(answer.data.steps.length, 1);
-  assert.equal(guideCalls, 1);
+  assert.equal(answer.status, 410, JSON.stringify(answer.data));
+  assert.ok(matches.data.sources[0].body.includes("Resetare"));
+  assert.equal(guideCalls, 0);
   assert.equal(
     (
       await request("/knowledge/" + doc.data.id + "/pdf", {
@@ -733,7 +755,7 @@ test("mail polling recovers a committed root email without a job and never recla
   );
   assert.equal(
     (
-      await db.query("SELECT 1 FROM processing_jobs WHERE message_id=$1", [
+      await db.query("SELECT 1 FROM dispatch_jobs WHERE message_id=$1", [
         saved.id,
       ])
     ).rowCount,
@@ -742,30 +764,23 @@ test("mail polling recovers a committed root email without a job and never recla
   await service.sync(connection.id, org);
   assert.equal(
     (
-      await db.query("SELECT state FROM processing_jobs WHERE message_id=$1", [
+      await db.query("SELECT state FROM dispatch_jobs WHERE message_id=$1", [
         saved.id,
       ])
     ).rows[0].state,
     "pending",
   );
-  let calls = 0;
-  const runner = createAiRunner(db, {
-    classify: async () => {
-      calls++;
-      return {
-        skillId: skill,
-        confidence: 0.99,
-        model: "fixture",
-        promptVersion: "v1",
-        reason: "",
-      };
-    },
+  const runner = createRuleService(db);
+  await runner.save(org, {
+    name: "Resetare",
+    skillId: skill,
+    enabled: true,
+    conditions: [{ field: "subject", operator: "contains", value: "resetare" }],
   });
   await runner.process(org, saved.id);
-  await db.query(
-    "UPDATE processing_jobs SET state='done' WHERE message_id=$1",
-    [saved.id],
-  );
+  await db.query("UPDATE dispatch_jobs SET state='done' WHERE message_id=$1", [
+    saved.id,
+  ]);
   raw = {
     ...raw,
     externalId: "checkpoint-reply",
@@ -776,7 +791,15 @@ test("mail polling recovers a committed root email without a job and never recla
   };
   await service.sync(connection.id, org);
   await service.sync(connection.id, org);
-  assert.equal(calls, 1);
+  assert.equal(
+    (
+      await db.query(
+        "SELECT count(*)::int n FROM rule_decisions WHERE message_id=$1",
+        [saved.id],
+      )
+    ).rows[0].n,
+    1,
+  );
   assert.equal(
     (
       await db.query(
@@ -797,7 +820,7 @@ test("mail polling recovers a committed root email without a job and never recla
   );
   assert.equal(
     (
-      await db.query("SELECT state FROM processing_jobs WHERE message_id=$1", [
+      await db.query("SELECT state FROM dispatch_jobs WHERE message_id=$1", [
         saved.id,
       ])
     ).rows[0].state,

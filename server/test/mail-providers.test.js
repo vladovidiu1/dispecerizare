@@ -233,7 +233,7 @@ test("oversize IMAP messages retain metadata for manual review without downloadi
     },
   );
   assert.equal(source, false);
-  assert.equal(r.messages[0].skipAi, true);
+  assert.equal(r.messages[0].skipDispatch, true);
 });
 
 test("start-now snapshots IMAP UIDNEXT without reading existing messages and imports only higher UIDs", async () => {

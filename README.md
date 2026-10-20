@@ -1,16 +1,16 @@
 # Relay
 
-**Gestionarea și distribuirea solicitărilor primite prin email, cu AI local și control uman.**
+**Gestionarea și distribuirea solicitărilor primite prin email, cu reguli configurabile și control uman.**
 
-Relay conectează o căsuță Outlook/Microsoft 365, Gmail sau Yahoo, creează taskuri și le distribuie după competențele, disponibilitatea și încărcarea agenților. Administratorul configurează echipa, iar agenții lucrează într-o interfață web. Clasificarea și asistența din instrucțiunile de lucru sunt procesate local cu Ollama/Qwen.
+Relay conectează o căsuță Outlook/Microsoft 365, Gmail sau Yahoo, creează taskuri și le distribuie după competențele, disponibilitatea și încărcarea agenților. Administratorul configurează echipa, iar agenții lucrează într-o interfață web. Categoria este stabilită prin reguli explicite. Rezolvările agenților sunt păstrate și pot fi consultate alături de instrucțiunile ITL, prin căutare SQL. Nu este necesar niciun model AI.
 
 | Informație          | Situație curentă                                                             |
 | ------------------- | ---------------------------------------------------------------------------- |
-| Versiune aplicație  | `0.1.0`                                                                      |
+| Versiune aplicație  | `0.2.0`                                                                      |
 | Stadiu              | Pilot; evaluarea IT/Cyber Security și acceptanța operațională rămân necesare |
 | Interfață / backend | React 19 / Node.js și Express 5                                              |
-| Bază de date        | PostgreSQL 17; migrări `001`–`003`                                           |
-| Model implicit      | `qwen3:8b`, prin Ollama pe același calculator cu backendul                   |
+| Bază de date        | PostgreSQL 17/18; migrări `001`–`004`                                        |
+| Dispecerizare       | Reguli stabilite de administrator; fără AI activ                             |
 | Găzduire            | Windows 11 / Cloud PC sau server aprobat; acces HTTPS intern prin Caddy      |
 
 ## Documentație
@@ -36,16 +36,17 @@ Relay conectează o căsuță Outlook/Microsoft 365, Gmail sau Yahoo, creează t
 
 - Autentificare administrator/agent, separare pe organizații și acces la taskuri verificat în backend.
 - Monitorizare Inbox, pornire numai de la momentul activării, reluare după checkpoint și import manual explicit.
-- Clasificare cu exemple configurabile și corecții umane folosite drept context, fără reantrenarea modelului.
+- Reguli cu prioritate, condiții pe expeditor, subiect, text sau numele atașamentului; conflictele rămân pentru verificare.
 - Repartizare după skill și numărul de taskuri deschise, respectând disponibilitatea și capacitatea; override manual pentru admin.
 - Conversații actualizate pe același task, atașamente descărcabile, note interne și istoric.
-- Bibliotecă ITL PDF și pași propuși de Qwen cu document, pagină și citate verificabile.
+- ITL PDF cu fragmente și pagini; rezolvări documentate, căutate lexical pentru sugestii viitoare.
+- Transfer între colegi cu explicație și istoric; răspunsuri email din contul agentului, în conversația inițială.
 - Rapoarte XLSX EMMA: un task pentru fiecare rând eligibil, după codurile configurate la agenți.
 - Dashboarduri, schimbarea parolei proprii și dezactivarea/reactivarea conturilor.
 
 ## Pornire rapidă pentru o instalare deja configurată
 
-Necesită Node.js 24 recomandat, PostgreSQL și Ollama pornite, modelul descărcat și `.env` completat. Pentru prima instalare urmează [ghidul Windows](docs/installation-windows.md), inclusiv crearea bazei și a administratorului.
+Necesită Node.js 24 recomandat, PostgreSQL pornit și `.env` completat. Pentru prima instalare urmează [ghidul Windows](docs/installation-windows.md), inclusiv crearea bazei și a administratorului.
 
 ```powershell
 npm.cmd ci
@@ -63,8 +64,12 @@ Deschide `http://localhost:5173`, cu `APP_ORIGIN=http://localhost:5173` și `VIT
 
 ## Date, securitate și limite
 
-SQL, documentele și inferența rămân pe infrastructura unde instalezi aplicația. Citirea emailurilor necesită conexiuni către furnizorul respectiv. `.env`, `.relay`, cheile TLS și backupurile sunt private și nu se publică în GitHub.
+SQL și documentele rămân pe infrastructura unde instalezi aplicația. Citirea și trimiterea emailurilor necesită conexiuni către furnizorul respectiv. `.env`, `.relay`, cheile TLS și backupurile sunt private și nu se publică în GitHub.
 
-Versiunea curentă nu include trimiterea răspunsurilor prin email, SSO/MFA, recuperarea parolelor uitate, OCR, antivirus integrat, retenție automată sau installer/servicii Windows. Notele interne nu trimit emailuri. Un certificat HTTPS și testele automate nu reprezintă aprobarea Cyber Security; vezi [controalele și riscurile cunoscute](docs/security.md).
+Versiunea curentă nu include SSO/MFA, recuperarea parolelor uitate, OCR, antivirus integrat, retenție automată sau installer/servicii Windows. Notele interne nu trimit emailuri. Un certificat HTTPS și testele automate nu reprezintă aprobarea Cyber Security; vezi [controalele și riscurile cunoscute](docs/security.md).
 
 Fără `VITE_API_ENABLED=true`, interfața poate porni în modul demonstrativ cu date în memorie. Demo-ul nu este o instalare funcțională a backendului.
+
+## Actualizarea unei instalări existente
+
+Urmează [migrarea la reguli și colaborare](docs/rules-and-collaboration.md). Fă backup înainte, păstrează `.env` și `.relay`, rulează `npm.cmd ci` și `npm.cmd run db:migrate`, apoi reconstruiește interfața. Nu rerula bootstrapul. Datele AI din SQL și codul arhivat în `archive/ai` sunt păstrate, fără a fi folosite de aplicația activă.

@@ -21,13 +21,13 @@ Capacitatea reprezintă numărul maxim de taskuri deschise pentru distribuirea a
 
 Taskurile deja alocate unui utilizator dezactivat rămân la el până la intervenția administratorului. Verifică și redistribuie lucrările înainte sau după offboarding. Cheile API ale organizației se gestionează separat.
 
-## 2. Exemple și calibrare
+## 2. Reguli de dispecerizare
 
-În **Test AI local**, adaugă exemple reprezentative pentru fiecare competență: un subiect, textul mesajului și tagul corect. Evită exemple identice, excesiv de generale sau contradictorii. Nu introduce date personale neaprobate.
+În **Reguli de dispecerizare**, creează o regulă cu nume, prioritate, competență și una sau mai multe condiții. Compararea ignoră majusculele și diacriticele. Alege dacă trebuie îndeplinite toate condițiile sau oricare dintre ele. Poți folosi expeditorul, domeniul, subiectul, corpul sau numele unui atașament. Nu se interpretează expresii regulate.
 
-Rulează teste manuale și verifică atât tagul, cât și responsabilul. Testele creează taskuri persistente. Pentru un task corect, confirmă tagul; pentru unul greșit, corectează competența. Referința umană actuală este folosită în contextul cererilor viitoare.
+Numărul de prioritate mai mic câștigă. Dacă la aceeași prioritate se potrivesc competențe diferite, taskul rămâne nealocat pentru verificare. Mai multe reguli de aceeași prioritate cu aceeași competență sunt compatibile. Fără regulă, nu există alegere automată. Conținutul PDF/Excel nu intră în condiții; regulile EMMA rămân separate.
 
-Acest proces nu reantrenează Qwen. Modelul primește un set limitat de exemple selectate prin SQL. Nu presupune că întreaga arhivă este încărcată în prompt sau că repetarea unei corecții garantează clasificarea următoare.
+Testează mai întâi cu **Verifică fără creare de task**, apoi opțional creează un task de test. Oprirea sau modificarea regulii afectează procesările viitoare, nu mută taskurile deja alocate. Pentru un task Nou nealocat și neconfirmat, folosește **Aplică din nou regulile**. Corecțiile umane au prioritate. Exemplele și clasificările AI istorice rămân în SQL și nu sunt consultate de motorul de reguli.
 
 ## 3. Căsuțe email
 
@@ -39,7 +39,7 @@ Urmează [procedura furnizorului](email-setup.md). Conexiunea se creează oprit�
 | Pornește cu istoric                 | Importă explicit intervalul configurat pentru o conexiune fără checkpoint     |
 | Oprește monitorizarea               | Oprește verificările automate; nu șterge taskuri                              |
 | Reia de la ultima verificare        | Păstrează checkpointul și include mesajele sosite în pauză                    |
-| Sincronizează acum                  | Cere un lot de la checkpoint; nu înseamnă că modelul a terminat clasificarea  |
+| Sincronizează acum                  | Cere un lot de la checkpoint; nu înseamnă că regulile au fost aplicate        |
 | Caută și Importă                    | Consultă mesaje din Inbox și importă numai rezultatele alese                  |
 | Deconectează / elimină configurația | Oprește accesul local; taskurile rămân; acordul la furnizor se revocă separat |
 
@@ -49,13 +49,15 @@ Monitorizarea continuă după logoutul administratorului dacă backendul, SQL ș
 
 ## 4. Coada și intervențiile
 
-Verifică în lista de mesaje taskurile nealocate, cele Nou rămase mult timp și istoricul erorilor. Un task nealocat poate însemna încredere redusă, lipsa competențelor sau lipsa capacității.
+Verifică în lista de mesaje taskurile nealocate, cele Nou rămase mult timp și istoricul erorilor. Un task nealocat poate însemna nicio regulă, reguli contradictorii sau lipsă de capacitate.
 
-Pentru un task clasificat suficient sau confirmat de om, workerul poate relua distribuirea când există un agent eligibil. Un rezultat cu încredere mică necesită verificare; simpla eliberare a unui agent nu îl transformă în rezultat sigur.
+Taskurile cu tag stabilit prin regulă sau de om așteaptă un agent disponibil cu skillul și capacitatea necesare. Taskurile fără regulă sau cu reguli contradictorii necesită intervenție.
 
 Poți selecta manual orice utilizator activ al organizației. Alocarea manuală nu respectă automat skillul sau capacitatea și este consemnată ca intervenție. Corectarea tagului fără responsabil explicit reia distribuirea. Nu schimba simultan starea și tagul când intenția este redistribuirea automată.
 
-**Reîncearcă clasificarea în fundal** se folosește pentru taskuri Nou, nealocate, neconfirmate, după corectarea cauzei. Nu suprascrie o decizie umană. Un email nou al aceleiași conversații păstrează în mod normal agentul și tagul.
+**Aplică din nou regulile** se folosește pentru taskuri Nou, nealocate și neconfirmate. Un email nou în aceeași conversație păstrează agentul și tagul. Agenții pot preda explicit unui coleg activ din organizație, cu motiv obligatoriu; transferul păstrează tagul și istoricul, iar starea devine Nou. Transferul explicit poate depăși skillul/capacitatea, astfel că agentul trebuie să verifice destinatarul.
+
+Pentru emailuri, fiecare utilizator își configurează separat contul de expediere în Setări. Autorizarea căsuței de intrare nu acordă automat drepturi de trimitere. Vezi [procedura nouă](rules-and-collaboration.md).
 
 ## 5. Biblioteca ITL
 

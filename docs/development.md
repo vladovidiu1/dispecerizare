@@ -4,7 +4,7 @@
 
 ## Configurarea mediului
 
-Folosește Node.js minimum 22.13, recomandat 24, PostgreSQL 17 și dependențele din `package-lock.json`. În Windows, comenzile de mai jos folosesc `npm.cmd`; în Linux/macOS se poate folosi `npm`. Instalarea și pornirea inițială sunt descrise în [ghidul Windows](installation-windows.md).
+Folosește Node.js minimum 22.13, recomandat 24, PostgreSQL 17/18 și dependențele din `package-lock.json`. În Windows, comenzile de mai jos folosesc `npm.cmd`; în Linux/macOS se poate folosi `npm`. Instalarea și pornirea inițială sunt descrise în [ghidul Windows](installation-windows.md).
 
 ```powershell
 npm.cmd ci
@@ -18,7 +18,7 @@ npm.cmd run api
 npm.cmd run dev -- --host 127.0.0.1 --port 5173 --strictPort
 ```
 
-Folosește `APP_ORIGIN=http://localhost:5173` și `VITE_API_ENABLED=true`. Backendul citește `.env` prin opțiunile Node din scripturi; nu publica fișierul. Pentru testul real de model, pornește Ollama și instalează modelul configurat. Testele automate nu cer acces la căsuțe email reale.
+Folosește `APP_ORIGIN=http://localhost:5173` și `VITE_API_ENABLED=true`. Backendul citește `.env` prin opțiunile Node din scripturi; nu publica fișierul. Nu există inferență în runtime; archive/ai este păstrat pentru o integrare viitoare explicită. Testele automate nu cer acces la căsuțe email reale.
 
 ## Comenzile repository-ului
 
@@ -50,9 +50,6 @@ Folosește `APP_ORIGIN=http://localhost:5173` și `VITE_API_ENABLED=true`. Backe
 | `HOST`, `PORT`                                           | Interfața și portul backendului; în profil HTTPS HOST este 127.0.0.1                        |
 | `VITE_API_ENABLED`                                       | true pentru aplicația conectată; este setare de build/UI, nu secret                         |
 | `ORGANIZATION_NAME`, `ADMIN_EMAIL`, `ADMIN_PASSWORD`     | Numai la bootstrap; elimină parola din fișier după succes                                   |
-| `OLLAMA_URL`                                             | Origine HTTP loopback, implicit 127.0.0.1:11434                                             |
-| `OLLAMA_MODEL`                                           | Implicit qwen3:8b; adaptorul presupune răspunsul JSON validat                               |
-| `OLLAMA_TIMEOUT_MS`                                      | Implicit 300000; interval acceptat 1000–600000                                              |
 | `RELAY_DATA_DIR`                                         | Director privat pentru cheie și folder ITL; implicit .relay                                 |
 | `API_PROXY_TARGET`                                       | Ținta API pentru Vite, implicit http://127.0.0.1:3001                                       |
 | `TEST_DATABASE_URL`                                      | Bază dedicată dezvoltării, cu drept de CREATE SCHEMA; nu folosi baza operațională           |
@@ -78,7 +75,7 @@ Pentru verificarea HTTPS, sunt necesare Caddy 2, OpenSSL și un build cu API act
 npm.cmd run test:https
 ```
 
-Separă în raport: teste automate cu furnizori/model simulate, verificare TLS reală de laborator și validare pe conturile/documentele companiei. Un test simulat nu certifică accesul Microsoft sau calitatea clasificării Qwen.
+Separă în raport: teste automate cu furnizori de email simulați, verificare TLS reală de laborator și validare pe conturile/documentele companiei. Un test simulat nu certifică accesul Microsoft sau livrarea reală a emailurilor.
 
 ## Structura repository-ului
 

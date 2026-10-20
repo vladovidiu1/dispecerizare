@@ -1,111 +1,38 @@
 # Prezentare funcțională
 
-[Documentație](README.md) · [Manual administrator](administrator-guide.md) · [Manual agent](agent-guide.md)
+[Documentație](README.md) · [Administrator](administrator-guide.md) · [Agent](agent-guide.md)
 
-## Scop
-
-Relay gestionează solicitări primite prin email și distribuie munca între agenți, independent de un domeniu de activitate specific. Exemple de utilizare sunt suportul intern, facturarea, administrarea contractelor și operațiunile de departament.
-
-Modelul AI propune competența necesară. Backendul stabilește responsabilul folosind configurația curentă. Administratorul poate interveni manual, iar decizia umană asupra tagului are prioritate față de o clasificare AI care sosește ulterior.
-
-## Roluri
-
-| Rol                          | Responsabilități principale                                                                           |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Agent                        | Lucrează la taskurile proprii, schimbă starea, adaugă note, verifică sau corectează competența        |
-| Administrator                | Configurează echipa, sursele, exemplele și documentele; supraveghează coada și poate repartiza manual |
-| IT / operator infrastructură | Instalează și operează platforma, conectivitatea, certificatele, serviciile și backupurile            |
-| Integrator robot             | Poate trimite solicitări printr-o cheie API a organizației, conform contractului de ingestie          |
-
-Conturile aplicației sunt distincte de conturile Microsoft/Google/Yahoo. Autorizarea citirii unei căsuțe nu autentifică automat agenții în Relay.
-
-## Fluxul unei solicitări
+Relay gestionează solicitări email și distribuie munca indiferent de domeniu. Administratorul definește competențe și reguli explicite; agenții lucrează la taskurile proprii. Versiunea 0.2.0 nu folosește AI. Datele SQL și codul pentru o posibilă integrare viitoare sunt păstrate separat.
 
 ```mermaid
 flowchart TD
-  A[Email nou în Inbox] --> B[Import și identificare conversație]
-  B --> C{Actualizare cunoscută?}
-  C -->|Da| D[Completează taskul existent]
-  C -->|Nu| E{Raport EMMA configurat?}
-  E -->|Da| F[Taskuri din rânduri eligibile]
-  E -->|Nu| G[Clasificare Qwen local]
-  G --> H{Încredere suficientă și agent eligibil?}
-  H -->|Da| I[Alocare după skill și încărcare]
-  H -->|Nu| J[Nealocat / verificare]
-  F --> I
-  I --> K[Lucru agent și rezolvare]
-  J --> L[Control admin sau așteptare capacitate]
+  A[Email în Inbox] --> B{Conversație existentă?}
+  B -->|Da| C[Actualizare task · păstrează tag și agent]
+  B -->|Nu| D[Reguli de dispecerizare sau EMMA]
+  D --> E{Categorie determinată fără conflict?}
+  E -->|Da| F[Agent eligibil cu încărcarea minimă]
+  E -->|Nu| G[Verificare administrator]
+  F --> H[Tratare · rezolvare · reply · transfer]
 ```
 
-Diagrama descrie traseele uzuale. Un raport EMMA atașat unui email de actualizare poate fi procesat separat prin regulile lui; lipsa unui agent disponibil nu pierde taskurile eligibile deja create.
+## Roluri și funcții
 
-## Reguli de distribuire
+Agentul vede taskurile proprii, schimbă starea/tagul, adaugă note și rezolvări, trimite un reply din contul personal autorizat și poate preda unui coleg activ cu explicație. Administratorul configurează echipa, regulile, sursele, documentele și codurile EMMA și poate aloca manual oricui din organizație. IT administrează infrastructura, accesul și permisiunile externe.
 
-Un utilizator este eligibil pentru distribuire automată dacă este activ, disponibil, are competența necesară și nu și-a atins capacitatea. Se preferă numărul minim de taskuri deschise, incluzând celelalte competențe și taskurile EMMA. La egalitate, se preferă cel mai demult repartizat, apoi identificatorul utilizatorului.
+Contul Relay este separat de Microsoft/Google/Yahoo. Citirea unei shared mailbox și expedierea din contul agentului au autorizări separate. Autentificarea Relay nu este SSO.
 
-Taskurile deschise sunt cele cu starea **Nou** sau **În lucru**. Capacitatea este o limită de taskuri deschise, nu o estimare în ore. Nu se mută automat taskuri deja alocate pentru a egaliza încărcarea. Administratorul poate face override către orice utilizator activ din aceeași organizație, inclusiv peste capacitate sau în afara competenței.
+Regulile folosesc condiții all/any și prioritate. Compararea ignoră diacriticele și majusculele. Nu există clasificare semantică sau învățare automată din exemple. Sugestiile sunt proceduri umane partajate și fragmente ITL, găsite lexical în SQL. Agentul verifică aplicabilitatea lor.
 
-Pentru clasificarea AI, pragul curent de alocare automată este `0,75`. Încrederea declarată de model nu este o probabilitate calibrată. Taskurile cu încredere redusă rămân pentru verificare; cele clasificate suficient sau confirmate de om pot fi distribuite ulterior când apare capacitate.
+Conversațiile folosesc ID-urile furnizorului și referințele RFC. Actualizările noi pot redeschide un task rezolvat. Atașamentele sunt descărcabile, fără execuție automată. EMMA creează un task pe rând eligibil al unui XLSX; nu grupează toate rândurile unui cod într-un singur task.
 
-## Ciclul de viață al taskului
+## Limite
 
-| Stare    | Semnificație                                        |
-| -------- | --------------------------------------------------- |
-| Nou      | Solicitare deschisă, încă neîncepută sau redeschisă |
-| În lucru | Agentul a început tratarea                          |
-| Rezolvat | Tratarea curentă a fost încheiată                   |
+- Polling implicit 60 secunde, loturi de până la 5 mesaje; căutare până la 20 rezultate. Nu este garantat un timp maxim de import.
+- UI: pagini de 100 taskuri, API maximum 200.
+- Reguli: 1–20 condiții, valoare maximum 250 caractere, prioritate 1–10000; numele atașamentului, nu conținutul său.
+- Atașamente: maximum 50, până la 20 MB/fișier și 30 MB total per mesaj; MIME IMAP peste 30 MB rămâne pentru verificare manuală.
+- PDF: 20 MB, 500 pagini, 800.000 caractere; fără OCR. XLSX: 10 MB comprimat / 40 MB decomprimat, 100 coloane și 10.000 rânduri/foaie; până la 1000 taskuri eligibile/fișier.
+- Capacitate: implicit 20, configurabil 1–1000 taskuri deschise pentru alocare automată. Transferul/alocarea manuală poate depăși această limită.
+- Email trimis: text simplu, maximum 20.000 caractere, destinatarul original, fără CC/BCC sau atașamente. Acceptarea furnizorului nu garantează livrarea și nu există garanție exact-once.
 
-Un răspuns nou în aceeași conversație poate redeschide un task rezolvat. Agentul și competența se păstrează. Corectarea la o competență diferită readuce taskul la Nou și reia distribuirea fără Qwen; taskul poate ieși din lista agentului inițial.
-
-## Funcții de sprijin
-
-| Funcție                | Comportament disponibil                                                                        |
-| ---------------------- | ---------------------------------------------------------------------------------------------- |
-| Exemple de clasificare | Configurabile în SQL prin interfață; context selectat din exemple și confirmări umane          |
-| Conversație            | Emailuri legate prin identificatori de conversație sau antete de răspuns, nu doar prin subiect |
-| Atașamente             | Copii locale descărcabile din taskurile accesibile utilizatorului                              |
-| Note                   | Colaborare internă; nu trimit emailuri                                                         |
-| ITL                    | PDF-uri cu text, căutare lexicală și pași AI citați; nu execută acțiuni                        |
-| EMMA                   | Rânduri XLSX selectate determinist după codurile agenților, fără clasificator AI               |
-| Dashboarduri           | Totaluri și încărcare din taskurile accesibile; flux pe 7 zile și timp mediu de rezolvare      |
-| Istoric                | Evenimente despre task, clasificări și intervenții; nu este un jurnal de securitate complet    |
-
-## Capacități și limite configurate
-
-Valorile de mai jos sunt limite ale implementării, nu garanții de performanță. În documente, MB se referă la pragurile de octeți din cod, nu la o dimensiune comercială garantată a fișierului după toate codificările email.
-
-| Element                           | Valoare curentă                                                                               |
-| --------------------------------- | --------------------------------------------------------------------------------------------- |
-| Verificare email                  | Implicit 60 secunde; configurabil 30–3600 secunde                                             |
-| Istoric opțional la creare        | 1–90 zile, implicit 1; start-now nu importă acest istoric                                     |
-| Lot monitorizare                  | Se solicită până la 5 mesaje, apoi se continuă de la checkpoint                               |
-| Căutare în Inbox                  | Până la 20 rezultate; importul este explicit                                                  |
-| Pagină UI                         | 100 taskuri; API acceptă limită de până la 200                                                |
-| Competențe pentru fluxul AI local | 1–60                                                                                          |
-| Context de clasificare            | Până la 6 exemple, maximum 2 pe competență; corp email pentru model de maximum 6000 caractere |
-| Atașamente                        | Maximum 50, până la 20 MB per fișier și 30 MB total per mesaj                                 |
-| Sursă MIME IMAP                   | Peste 30 MB nu se descarcă automat corpul; rămân metadatele/indicația manuală                 |
-| PDF ITL                           | Maximum 20 MB, 500 pagini, 800.000 caractere; până la 100 fișiere la o scanare de folder      |
-| XLSX EMMA                         | Maximum 10 MB comprimat / 40 MB decomprimat, 100 coloane și 10.000 rânduri per foaie          |
-| Taskuri dintr-un XLSX             | Maximum 1000 rânduri eligibile per fișier                                                     |
-| Capacitate agent                  | Implicit 20; configurabil 1–1000 taskuri deschise                                             |
-| Inferență                         | O cerere comună la un moment dat pentru clasificare/test/ITL; timeout implicit 300 secunde    |
-
-## Glosar
-
-| Termen                   | Definiție                                                                                                                                      |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Organizație              | Limita logică a datelor unei firme/echipe, identificată prin UUID                                                                              |
-| Competență / skill / tag | Categoria necesară pentru rezolvarea solicitării                                                                                               |
-| Căsuță / mailbox         | Adresa sursă a emailurilor; separată de configurația de conectare                                                                              |
-| Checkpoint               | Punctul persistent până la care a avansat monitorizarea                                                                                        |
-| ITL                      | Instrucțiune tehnică de lucru, furnizată ca document PDF                                                                                       |
-| EMMA                     | Denumirea procesului de raportare a erorilor tarifare folosit în pilot; aplicația configurează coduri, nu cunoaște implicit regulile companiei |
-| Inferență                | Executarea modelului local pentru un răspuns; nu înseamnă reantrenare                                                                          |
-| Context                  | Fragmente/exemple trimise modelului la o cerere                                                                                                |
-
-## Limite de produs
-
-Nu sunt incluse trimiterea răspunsurilor, procesarea folderului Sent, SSO/MFA, resetarea parolelor uitate, OCR, antivirus, retenție automată, distribuirea unui executabil complet sau instalarea serviciilor Windows. Nu există un model antrenat pe datele companiei și nici o garanție de clasificare corectă.
-
-Deduplicarea aceluiași email sau atașament procesat nu reprezintă deduplicarea aceleiași probleme de business în rapoarte săptămânale diferite. Pentru aceasta trebuie stabilită o cheie, de exemplu contract + cod + perioadă. Nu există SLA, dimensionare sau disponibilitate ridicată validate în versiunea pilot.
+Nu sunt incluse SSO/MFA, resetarea parolelor uitate, antivirus, retenție automată, OCR, SLA, HA sau un installer complet de servicii Windows. Monitorizarea urmărește Inbox; nu citește automat Sent. Nu există deduplicare între rapoarte săptămânale distincte fără o cheie de business suplimentară. Pentru extinderea pilotului sunt necesare evaluarea IT/Cyber Security și validarea operațională.

@@ -1963,3 +1963,80 @@ legend {
     gap: 10px;
   }
 }
+
+/* Dispatch rules and task collaboration share the existing visual language. */
+.ai-form select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e7dfef;
+  border-radius: 7px;
+  color: #53435f;
+  background: white;
+}
+.rule-condition {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.4fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 14px;
+  border: 1px solid #eee6f4;
+  border-radius: 10px;
+  margin: 12px 0;
+}
+.rule-condition label {
+  min-width: 0;
+}
+.task-action-buttons {
+  margin: 20px 0;
+}
+.task-action-form {
+  margin: 16px 0;
+  padding: 20px;
+  border: 1px solid #e7dfef;
+  border-radius: 12px;
+  background: #fcfaff;
+}
+.task-action-form h3 {
+  margin-top: 0;
+}
+.ai-form label.checkbox {
+  flex-direction: row;
+  align-items: center;
+  line-height: 1.7;
+}
+.ai-form .checkbox input {
+  width: auto;
+  flex-shrink: 0;
+}
+.conversation-entry.outbound {
+  background: #f3f0fc;
+  border-left: 3px solid #9d7bbd;
+}
+.outgoing-list,
+.resolution-list {
+  margin: 24px 0;
+}
+.outgoing-list p,
+.resolution-list p,
+.task-action-form p {
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+  font-size: 12px;
+}
+@media (max-width: 700px) {
+  .rule-condition {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .task-action-form {
+    padding: 12px;
+  }
+  .task-action-buttons .button {
+    width: 100%;
+  }
+  .ai-form select {
+    font-size: 12px;
+  }
+}

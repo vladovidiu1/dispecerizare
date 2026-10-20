@@ -4,7 +4,7 @@
 
 ## Sursa de adevăr
 
-PostgreSQL este sursa datelor persistente. Migrările [001](../server/migrations/001_initial.sql), [002](../server/migrations/002_mail_learning.sql) și [003](../server/migrations/003_workflows.sql) sunt definiția autoritativă a schemei. Tabelele sunt create la migrare; nu este necesar un Excel pentru configurarea inițială a skillurilor.
+PostgreSQL este sursa datelor persistente. Migrările [001](../server/migrations/001_initial.sql), [002](../server/migrations/002_mail_learning.sql) [003](../server/migrations/003_workflows.sql) și [004](../server/migrations/004_rules_and_collaboration.sql) sunt definiția autoritativă a schemei. Tabelele sunt create la migrare; nu este necesar un Excel pentru configurarea inițială a skillurilor.
 
 Datele organizațiilor sunt în aceeași schemă, separate prin `organization_id` și verificările backendului. Mai multe chei externe compuse păstrează asocierea dintre organizație și entitate. Acest mecanism nu este PostgreSQL Row-Level Security și nu izolează datele față de un administrator SQL privilegiat.
 
@@ -23,7 +23,11 @@ erDiagram
   skills o|--o{ messages : categorie
   messages ||--o{ mail_entries : conversatie
   mail_entries ||--o{ attachments : include
-  messages ||--o| processing_jobs : procesare
+  messages ||--o| dispatch_jobs : procesare
+  messages ||--o{ task_resolutions : rezolvari
+  messages ||--o{ outgoing_mail : raspunsuri
+  users ||--o| sender_accounts : expediere
+  messages ||--o{ rule_decisions : reguli_aplicate
   messages ||--o{ message_events : istoric
   messages ||--o{ classifications : clasificari
   organizations ||--o{ knowledge_documents : biblioteca
@@ -50,7 +54,7 @@ Diagrama este conceptuală și omite unele relații pentru lizibilitate. Constr�
 | `classifications`         | Rezultate AI cu model, prompt, încredere și motiv                               |
 | `message_events`          | Evenimentele taskului, autor, tip și datele schimbării                          |
 | `notes`                   | Note interne cu autor și dată                                                   |
-| `processing_jobs`         | Coada persistentă, încercări, lease și eroarea curentă                          |
+| `processing_jobs`         | Coada AI istorică păstrată, neprocesată de runtime                              |
 | `sessions`                | Hashul tokenului de sesiune și expirarea                                        |
 | `api_keys`                | Chei de organizație pentru roboți, stocate ca hash și revocabile                |
 | `emma_rules`              | Condițiile și structura rapoartelor eligibile                                   |
@@ -73,7 +77,7 @@ Diagrama este conceptuală și omite unele relații pentru lizibilitate. Constr�
 | ----------------------- | ------------------------------------------------ |
 | `messages.status`       | Nou, În lucru, Rezolvat                          |
 | `messages.priority`     | Scăzută, Medie, Ridicată                         |
-| `messages.tag_source`   | ai, human sau null                               |
+| `messages.tag_source`   | rule, human, ai (istoric) sau null               |
 | `messages.task_kind`    | email sau emma                                   |
 | `processing_jobs.state` | pending, running, retry, done, failed, cancelled |
 | `emma_imports.state`    | done sau failed                                  |
@@ -95,3 +99,18 @@ Nu există politici automate de retenție sau API general de ștergere a arhivei
 `db:migrate` aplică migrările lipsă într-o tranzacție, protejată cu lock. Poate fi repetată; nu rulează bootstrapul. Nu există migrări inverse automate.
 
 Modificarea directă a skillurilor, alocărilor sau istoricului în SQL poate ocoli validările și auditul aplicației. Pentru operații uzuale se folosește API-ul/interfața. Intervențiile SQL de recuperare se fac numai controlat, după backup, cu versiunea schemei cunoscută.
+
+## Schema 004 — reguli și colaborare
+
+| Tabel            | Semnificație                                                                             |
+| ---------------- | ---------------------------------------------------------------------------------------- |
+| dispatch_rules   | Condiții JSON, all/any, skill și prioritate, stare activă                                |
+| dispatch_jobs    | Coada activă de evaluare a regulilor; lease 2 minute                                     |
+| rule_decisions   | Rezultat și snapshot al regulilor potrivite; istoricul supraviețuiește ștergerii regulii |
+| task_resolutions | Rezumat/pași, autor, partajare, dată; folosite lexical numai când taskul este rezolvat   |
+| sender_accounts  | Cont personal, credențiale criptate, revision, o identitate per utilizator               |
+| outgoing_mail    | Outbox idempotent, referințe RFC, snapshot adresare, stare și erori                      |
+
+mail_entries.direction distinge inbound/outbound. messages.tag_source acceptă rule, human, ai sau null; ai este numai istoric. classification_examples, classifications și processing_jobs rămân în SQL, dar nu sunt consumate de workerele active. Migrarea nu recreează organizația și nu șterge modelele de pe disc.
+
+Stările outboxului sunt queued, sending, sent, failed, unknown și cancelled. sent înseamnă acceptare de furnizor sau confirmare manuală auditată, nu dovadă automată de livrare. requestId este unic per organizație/autor; un requestId cu alt text/task este refuzat. Refacerea unei baze într-un mediu de test necesită izolarea trimiterii externe.

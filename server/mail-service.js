@@ -120,18 +120,18 @@ export function createMailService(
       );
       if (report.matched) {
         await db.query(
-          "UPDATE processing_jobs SET state='cancelled',lease_until=NULL WHERE message_id=$1 AND state IN ('pending','running','retry')",
+          "UPDATE dispatch_jobs SET state='cancelled',lease_until=NULL WHERE message_id=$1 AND state IN ('pending','running','retry')",
           [result.id],
         );
         continue;
       }
       if (result.updated) continue;
       await db.query(
-        "INSERT INTO processing_jobs(message_id,organization_id,state,last_error) SELECT id,organization_id,$2,$3 FROM messages WHERE id=$1 AND tag_source IS DISTINCT FROM 'human' AND status='Nou' AND assigned_to IS NULL AND task_kind='email' ON CONFLICT(message_id) DO NOTHING",
+        "INSERT INTO dispatch_jobs(message_id,organization_id,state,last_error) SELECT id,organization_id,$2,$3 FROM messages WHERE id=$1 AND tag_source IS DISTINCT FROM 'human' AND status='Nou' AND assigned_to IS NULL AND task_kind='email' ON CONFLICT(message_id) DO NOTHING",
         [
           result.id,
-          raw.skipAi ? "failed" : "pending",
-          raw.skipAi ? "MAIL_MESSAGE_TOO_LARGE" : null,
+          raw.skipDispatch || raw.skipAi ? "failed" : "pending",
+          raw.skipDispatch || raw.skipAi ? "MAIL_MESSAGE_TOO_LARGE" : null,
         ],
       );
     }
@@ -140,7 +140,7 @@ export function createMailService(
   const service = {
     async list(org) {
       const { rows } = await db.query(
-        `SELECT c.id,c.provider,c.enabled,c.initial_days AS "initialDays",c.poll_seconds AS "pollSeconds",c.last_synced_at AS "lastSyncedAt",c.last_error AS "lastError",c.sync_state->>'startMode' AS "startMode",c.sync_state->>'since' AS "monitorFrom",m.address,c.encrypted_credentials,(SELECT count(*)::int FROM processing_jobs j JOIN messages x ON x.id=j.message_id WHERE x.mailbox_id=c.mailbox_id AND j.state IN ('pending','running','retry')) AS queued FROM mailbox_connections c JOIN mailboxes m ON m.id=c.mailbox_id WHERE c.organization_id=$1 ORDER BY c.created_at DESC`,
+        `SELECT c.id,c.provider,c.enabled,c.initial_days AS "initialDays",c.poll_seconds AS "pollSeconds",c.last_synced_at AS "lastSyncedAt",c.last_error AS "lastError",c.sync_state->>'startMode' AS "startMode",c.sync_state->>'since' AS "monitorFrom",m.address,c.encrypted_credentials,(SELECT count(*)::int FROM dispatch_jobs j JOIN messages x ON x.id=j.message_id WHERE x.mailbox_id=c.mailbox_id AND j.state IN ('pending','running','retry')) AS queued FROM mailbox_connections c JOIN mailboxes m ON m.id=c.mailbox_id WHERE c.organization_id=$1 ORDER BY c.created_at DESC`,
         [org],
       );
       return Promise.all(

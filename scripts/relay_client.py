@@ -1,4 +1,4 @@
-"""Provider-independent bridge for the existing mail/Ollama worker (Python stdlib)."""
+"""Provider-independent bridge for the external mail ingestion (Python stdlib)."""
 import json
 import os
 import urllib.error
@@ -30,7 +30,7 @@ def relay_request(path, payload=None):
 
 
 def send_email(email_payload):
-    """Use the same mailboxId + externalId on retries; the API deduplicates them."""
+    """Import mail only (no classification). Use stable mailboxId + externalId on retries."""
     return relay_request('/ingest', email_payload)
 
 

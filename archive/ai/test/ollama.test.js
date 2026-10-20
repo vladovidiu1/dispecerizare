@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
-import { createOllama } from "../ollama.js";
+import { createOllama } from "../server/ollama.js";
 const skillId = "11111111-1111-4111-8111-111111111111";
 async function fixture(fn) {
   let result = { skillId, confidence: 0.95, reason: "Cerere despre factură" },

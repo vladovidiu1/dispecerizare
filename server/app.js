@@ -5,17 +5,16 @@ import { rateLimit } from "express-rate-limit";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { transaction } from "./db.js";
-import { createOllama } from "./ollama.js";
 import {
   event,
   requireSkill,
-  classifyMessage,
   storeMessage,
   eligibleAgent,
 } from "./messages.js";
 import { registerWorkflows } from "./workflows.js";
-import { getContext } from "./context.js";
-import { createAiRunner } from "./ai-runner.js";
+import { createRuleService, registerRuleRoutes } from "./rules.js";
+import { registerCollaborationRoutes } from "./collaboration.js";
+import { createSenderService, registerSenderRoutes } from "./sender-service.js";
 import { createMailService, registerMailRoutes } from "./mail-service.js";
 import { checkPassword, hashPassword, hashToken, token } from "./security.js";
 const uuid = z.string().uuid(),
@@ -50,29 +49,22 @@ const agentSchema = z.object({
     .max(200)
     .default([]),
 });
-const ingestSchema = z.object({
-  mailboxId: uuid,
-  externalId: text.max(1000),
-  threadId: text.max(1000).optional(),
-  senderName: text.max(200),
-  senderEmail: email,
-  subject: z.string().max(2000),
-  body: z.string().max(200000),
-  receivedAt: z.string().datetime({ offset: true }),
-  priority: z.enum(["Scăzută", "Medie", "Ridicată"]).default("Medie"),
-  internetMessageId: z.string().max(1000).optional(),
-  inReplyTo: z.string().max(1000).optional(),
-  references: z.array(z.string().max(1000)).max(100).optional(),
-  classification: z
-    .object({
-      skillId: uuid,
-      confidence: z.number().min(0).max(1),
-      model: text.max(150),
-      promptVersion: text.max(150),
-      reason: z.string().max(4000).default(""),
-    })
-    .optional(),
-});
+const ingestSchema = z
+  .object({
+    mailboxId: uuid,
+    externalId: text.max(1000),
+    threadId: text.max(1000).optional(),
+    senderName: text.max(200),
+    senderEmail: email,
+    subject: z.string().max(2000),
+    body: z.string().max(200000),
+    receivedAt: z.string().datetime({ offset: true }),
+    priority: z.enum(["Scăzută", "Medie", "Ridicată"]).default("Medie"),
+    internetMessageId: z.string().max(1000).optional(),
+    inReplyTo: z.string().max(1000).optional(),
+    references: z.array(z.string().max(1000)).max(100).optional(),
+  })
+  .strict();
 const messageSelect = `SELECT m.*, s.name AS category, u.name AS agent FROM messages m LEFT JOIN skills s ON s.id=m.skill_id LEFT JOIN users u ON u.id=m.assigned_to`;
 function present(m) {
   return {
@@ -95,6 +87,7 @@ function present(m) {
     priority: m.priority,
     status: m.status,
     receivedAt: m.received_at,
+    updatedAt: m.updated_at,
     time: new Intl.DateTimeFormat("ro-RO", {
       hour: "2-digit",
       minute: "2-digit",
@@ -114,8 +107,8 @@ export function createApp(
     appOrigin = "http://localhost:5173",
     trustProxyHops = 0,
     additionalOrigins = [],
-    ollama = createOllama(),
-    aiRunner = createAiRunner(db, ollama),
+    ruleService = createRuleService(db),
+    senderService = createSenderService(db),
     mailService = createMailService(db),
   } = {},
 ) {
@@ -568,130 +561,25 @@ export function createApp(
     res.status(204).end();
   });
   registerMailRoutes(app, admin, mailService);
-  app.get("/api/ai/status", admin, async (req, res) => {
-    res.json(await ollama.status());
-  });
-  app.post("/api/ai/test", admin, async (req, res) => {
-    const input = z
-      .object({
-        requestId: uuid,
-        senderName: text.max(200),
-        senderEmail: email,
-        subject: text.max(1000),
-        body: text.max(6000),
-      })
-      .strict()
-      .parse(req.body);
-    return aiRunner.run(async () => {
-      const skills = (
-        await db.query(
-          "SELECT id,name FROM skills WHERE organization_id=$1 ORDER BY name",
-          [req.actor.org],
-        )
-      ).rows;
-      if (!skills.length)
-        throw fail(400, "Adaugă cel puțin o competență înainte de test.");
-      if (skills.length > 60)
-        throw fail(400, "Testul local acceptă maximum 60 de competențe.");
-      const examples = await getContext(
-        db,
-        req.actor.org,
-        input.subject,
-        input.body,
-      );
-      const mailbox = (
-        await db.query(
-          "INSERT INTO mailboxes(id,organization_id,provider,address) VALUES($1,$2,'manual-test','relay-test@local.invalid') ON CONFLICT(organization_id,address) DO UPDATE SET address=EXCLUDED.address RETURNING id",
-          [randomUUID(), req.actor.org],
-        )
-      ).rows[0];
-      const saved = await storeMessage(db, req.actor, {
-        ...input,
-        mailboxId: mailbox.id,
-        externalId: input.requestId,
-        receivedAt: new Date().toISOString(),
-        priority: "Medie",
-      });
-      if (saved.duplicate)
-        return res.json({
-          ...saved,
-          classification: null,
-          notice: "Acest test a fost deja salvat. Nu a fost procesat din nou.",
-        });
-      let classification = null,
-        warning = null;
-      try {
-        classification = await ollama.classify({
-          subject: input.subject,
-          body: input.body,
-          skills,
-          examples,
-        });
-        await transaction(db, async (c) => {
-          await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
-            req.actor.org,
-          ]);
-          await requireSkill(c, req.actor.org, classification.skillId);
-          const current = (
-            await c.query("SELECT * FROM messages WHERE id=$1 FOR UPDATE", [
-              saved.id,
-            ])
-          ).rows[0];
-          if (
-            current.status !== "Nou" ||
-            current.assigned_to ||
-            current.tag_source === "human"
-          )
-            throw fail(409, "Mesajul a fost modificat manual între timp.");
-          await c.query(
-            "UPDATE messages SET skill_id=$1,updated_at=now() WHERE id=$2",
-            [classification.skillId, saved.id],
-          );
-          await classifyMessage(c, req.actor, saved.id, {
-            ...classification,
-            exampleRefs: examples.map((e) => ({ id: e.id, source: e.source })),
-          });
-        });
-      } catch (e) {
-        classification = null;
-        warning =
-          e.status === 409
-            ? e.message
-            : {
-                OLLAMA_UNCERTAIN:
-                  "Modelul nu a identificat o competență potrivită. Mesajul este salvat pentru verificare.",
-                OLLAMA_INVALID_OUTPUT:
-                  "Modelul a returnat un rezultat invalid. Mesajul este salvat pentru verificare.",
-                OLLAMA_CONTEXT_TOO_LARGE:
-                  "Configurația este prea mare pentru contextul de test. Mesajul este salvat pentru verificare.",
-              }[e.code] ||
-              "Clasificarea locală nu a reușit. Mesajul este salvat, nealocat, pentru verificare. Verifică Ollama și modelul configurat.";
-        await event(
-          db,
-          req.actor.org,
-          saved.id,
-          req.actor,
-          "classification_failed",
-          { reason: e.code || "classification_error" },
-        );
-      }
-      const row = (
-        await db.query(
-          messageSelect + " WHERE m.id=$1 AND m.organization_id=$2",
-          [saved.id, req.actor.org],
-        )
-      ).rows[0];
-      res
-        .status(201)
-        .json({ ...saved, message: present(row), classification, warning });
-    });
-  });
+  app.use("/api/ai", human, (req, res) =>
+    res.status(410).json({
+      error:
+        "Integrarea AI este dezactivată. Folosește regulile de dispecerizare.",
+    }),
+  );
+  registerRuleRoutes(app, { db, admin, service: ruleService });
+  registerSenderRoutes(app, { db, human, service: senderService });
 
   app.post("/api/ingest", async (req, res) => {
     if (req.actor.type !== "robot")
       throw fail(403, "Folosește cheia robotului");
     const b = ingestSchema.parse(req.body);
     const { id, duplicate, updated } = await storeMessage(db, req.actor, b);
+    if (!updated)
+      await db.query(
+        "INSERT INTO dispatch_jobs(message_id,organization_id) SELECT id,organization_id FROM messages WHERE id=$1 AND organization_id=$2 AND tag_source IS DISTINCT FROM 'human' AND assigned_to IS NULL AND status='Nou' ON CONFLICT(message_id) DO NOTHING",
+        [id, req.actor.org],
+      );
     res.status(duplicate ? 200 : 201).json({ id, duplicate, updated });
   });
 
@@ -733,7 +621,14 @@ export function createApp(
       throw fail(404, "Mesaj inexistent");
     return m;
   }
-  registerWorkflows(app, { db, human, admin, accessible, ollama, aiRunner });
+  registerWorkflows(app, { db, human, admin, accessible });
+  registerCollaborationRoutes(app, {
+    db,
+    human,
+    admin,
+    accessible,
+    senderService,
+  });
   app.get("/api/messages/:id/history", human, async (req, res) => {
     await accessible(db, req.actor, req.params.id);
     res.json(
@@ -768,28 +663,24 @@ export function createApp(
     });
     res.status(201).json({ saved: true });
   });
-  app.post(
-    "/api/messages/:id/retry-classification",
-    admin,
-    async (req, res) => {
-      await transaction(db, async (c) => {
-        await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
-          req.actor.org,
-        ]);
-        const m = await accessible(c, req.actor, req.params.id, true);
-        if (m.tag_source === "human" || m.assigned_to || m.status !== "Nou")
-          throw fail(
-            409,
-            "Doar mesajele noi, nealocate și neconfirmate pot fi reprocesate",
-          );
-        await c.query(
-          "INSERT INTO processing_jobs(message_id,organization_id) VALUES($1,$2) ON CONFLICT(message_id) DO UPDATE SET state='pending',attempts=0,next_attempt_at=now(),lease_until=NULL,last_error=NULL,updated_at=now()",
-          [m.id, req.actor.org],
+  app.post("/api/messages/:id/redispatch", admin, async (req, res) => {
+    await transaction(db, async (c) => {
+      await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
+        req.actor.org,
+      ]);
+      const m = await accessible(c, req.actor, req.params.id, true);
+      if (m.tag_source === "human" || m.assigned_to || m.status !== "Nou")
+        throw fail(
+          409,
+          "Doar mesajele noi, nealocate și neconfirmate pot fi reprocesate",
         );
-      });
-      res.status(202).json({ queued: true });
-    },
-  );
+      await c.query(
+        "INSERT INTO dispatch_jobs(message_id,organization_id) VALUES($1,$2) ON CONFLICT(message_id) DO UPDATE SET state='pending',attempts=0,next_attempt_at=now(),lease_until=NULL,last_error=NULL,updated_at=now()",
+        [m.id, req.actor.org],
+      );
+    });
+    res.status(202).json({ queued: true });
+  });
   app.post("/api/messages/:id/confirm-tag", human, async (req, res) => {
     await transaction(db, async (c) => {
       await c.query("SELECT id FROM organizations WHERE id=$1 FOR UPDATE", [
@@ -803,7 +694,7 @@ export function createApp(
         [req.actor.id, m.id],
       );
       await c.query(
-        "UPDATE processing_jobs SET state='cancelled',lease_until=NULL WHERE message_id=$1 AND state IN ('pending','running','retry')",
+        "UPDATE dispatch_jobs SET state='cancelled',lease_until=NULL WHERE message_id=$1 AND state IN ('pending','running','retry')",
         [m.id],
       );
       await event(c, req.actor.org, m.id, req.actor, "tag_confirmed", {
@@ -837,6 +728,19 @@ export function createApp(
         req.actor.org,
       ]);
       const m = await accessible(c, req.actor, req.params.id, true);
+      if (
+        ("assignedTo" in b || "skillId" in b) &&
+        (
+          await c.query(
+            "SELECT 1 FROM outgoing_mail WHERE message_id=$1 AND state='sending'",
+            [m.id],
+          )
+        ).rowCount
+      )
+        throw fail(
+          409,
+          "Un răspuns este în curs de trimitere. Așteaptă finalizarea înainte de redistribuire.",
+        );
       if (b.skillId) await requireSkill(c, req.actor.org, b.skillId);
       if ("skillId" in b) {
         await c.query(
@@ -844,13 +748,21 @@ export function createApp(
           [req.actor.id, m.id],
         );
         await c.query(
-          "UPDATE processing_jobs SET state='cancelled',lease_until=NULL WHERE message_id=$1 AND state IN ('pending','running','retry')",
+          "UPDATE dispatch_jobs SET state='cancelled',lease_until=NULL WHERE message_id=$1 AND state IN ('pending','running','retry')",
           [m.id],
         );
         await event(c, req.actor.org, m.id, req.actor, "tag_confirmed", {
           skillId: b.skillId,
         });
       }
+      if (
+        ("assignedTo" in b && b.assignedTo !== m.assigned_to) ||
+        ("skillId" in b && b.skillId !== m.skill_id)
+      )
+        await c.query(
+          "UPDATE outgoing_mail SET state='cancelled',last_error='TASK_CHANGED' WHERE message_id=$1 AND state='queued'",
+          [m.id],
+        );
       const retag = "skillId" in b && b.skillId !== m.skill_id;
       const reroute = retag && !("assignedTo" in b);
       if (reroute && "status" in b)

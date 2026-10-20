@@ -23,6 +23,7 @@ export async function migrate(db) {
       ["001", "001_initial.sql"],
       ["002", "002_mail_learning.sql"],
       ["003", "003_workflows.sql"],
+      ["004", "004_rules_and_collaboration.sql"],
     ]) {
       if (
         !(

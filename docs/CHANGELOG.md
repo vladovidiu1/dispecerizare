@@ -1,8 +1,19 @@
-# Istoricul modificărilor
+# Istoric modificări
+
+## 0.2.0 — 20 octombrie 2026
+
+- Motor determinist de reguli cu tab administrativ, preview, condiții și prioritate; fără apeluri AI în runtime.
+- Cod AI arhivat și date SQL păstrate; migrarea 004 separă coada de reguli de istoricul processing_jobs.
+- Rezolvări documentate cu autor, pași și partajare; sugestii lexicale din SQL și fragmente ITL, fără generare.
+- Transfer între colegi activi cu motiv și audit, păstrarea conversației/tagului și starea Nou.
+- Cont personal de expediere Microsoft 365 sau SMTP Gmail/Yahoo; reply cu antete RFC, Reply-To monitorizat, outbox idempotent și verificare manuală pentru trimiteri incerte.
+- Documentație revizuită și scenarii automate cu PostgreSQL real și furnizori simulați. Validarea pe tenantul companiei rămâne separată.
+
+## Versiuni anterioare
 
 [Documentație](README.md)
 
-Acest istoric grupează funcțiile implementate. Numărul `0.1.0` provine din package.json; intrările de mai jos nu presupun existența unor release-uri GitHub, taguri sau instalatoare distribuite.
+Acest istoric grupează funcțiile implementate. Intrările anterioare descriu versiunea 0.1.0; nu presupun existența unor release-uri GitHub, taguri sau instalatoare distribuite.
 
 ## Ediția documentației 1.0 — 18 octombrie 2026
 

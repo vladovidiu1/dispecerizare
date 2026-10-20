@@ -6,17 +6,15 @@
 
 Această procedură creează o instalare nouă. Pentru actualizarea uneia existente, folosește [procedura de actualizare](operations.md). Pentru mutarea aceleiași organizații cu datele ei, folosește procedura de migrare/restaurare, nu bootstrapul unei organizații noi.
 
-| Componentă        | Cerință                                                                                          |
-| ----------------- | ------------------------------------------------------------------------------------------------ |
-| Sistem            | Windows 11 / Cloud PC administrat, cu instalarea aprobată de IT                                  |
-| Node.js           | Minimum 22.13; recomandat seria 24 LTS, cu npm                                                   |
-| PostgreSQL        | Seria 17, pgAdmin recomandat pentru administrare                                                 |
-| Ollama            | Instalat pe calculatorul backendului                                                             |
-| Model             | `qwen3:8b`, descărcat înainte de test                                                            |
-| Rețea             | Acces aprobat la sursa codului/dependențe/model și ulterior la furnizorul email                  |
-| Spațiu și memorie | De dimensionat pentru model, SQL, documente și backupuri; nu există un prag de producție validat |
+| Componentă        | Cerință                                                                                   |
+| ----------------- | ----------------------------------------------------------------------------------------- |
+| Sistem            | Windows 11 / Cloud PC administrat, cu instalarea aprobată de IT                           |
+| Node.js           | Minimum 22.13; recomandat seria 24 LTS, cu npm                                            |
+| PostgreSQL        | Seria 17 sau 18, pgAdmin recomandat pentru administrare                                   |
+| Rețea             | Acces aprobat la sursa codului/dependențelor și ulterior la furnizorul email              |
+| Spațiu și memorie | De dimensionat pentru SQL, documente și backupuri; nu există un prag de producție validat |
 
-Pilotul inițial a fost folosit de utilizator pe un laptop cu 16 GB RAM și GPU de 4 GB. Aceasta nu este o dimensionare garantată pentru Cloud PC. Fără GPU, timpul de inferență poate fi semnificativ mai mare. Agenții folosesc doar browserul.
+Agenții folosesc doar browserul. Dimensionarea depinde de volumul de email, atașamente, documente și backupuri.
 
 Nu copia credențialele sau mesajele personale din instalarea de test într-o instalare nouă a companiei.
 
@@ -26,26 +24,19 @@ Folosește sursele oficiale sau pachetele aprobate de IT:
 
 - [Node.js](https://nodejs.org/)
 - [PostgreSQL pentru Windows](https://www.postgresql.org/download/windows/)
-- [Ollama pentru Windows](https://ollama.com/download/windows)
 
 După instalare, deschide un PowerShell nou:
 
 ```powershell
 node --version
 npm.cmd --version
-ollama --version
 ```
 
 Dacă instalarea existentă a PostgreSQL este administrată de companie, solicită o bază și un utilizator dedicate. Nu modifica rolurile sau porturile unei instalări folosite de alte aplicații.
 
-## 3. Descarcă și verifică modelul
+## 3. Motorul de dispecerizare
 
-```powershell
-ollama pull qwen3:8b
-ollama run qwen3:8b
-```
-
-Trimite un mesaj simplu. După răspuns, tastează `/bye`. Ollama trebuie să rămână disponibil pe calculatorul backendului; închiderea conversației de test nu înlocuiește administrarea procesului/serviciului.
+Versiunea curentă folosește reguli SQL configurate de administrator. Nu instala Ollama și nu descărca modele pentru această instalare. Un model existent nu este șters, dar nu mai este folosit. Nu este necesar GPU.
 
 ## 4. Obține proiectul
 
@@ -90,9 +81,6 @@ VITE_API_ENABLED=true
 ORGANIZATION_NAME=Numele organizatiei
 ADMIN_EMAIL=admin@example.test
 ADMIN_PASSWORD=PAROLA_INITIALA_GENERATA
-OLLAMA_URL=http://127.0.0.1:11434
-OLLAMA_MODEL=qwen3:8b
-OLLAMA_TIMEOUT_MS=300000
 ```
 
 Înlocuiește obligatoriu valorile PAROLA_URL_ENCODED și PAROLA_INITIALA_GENERATA; acestea sunt substituenți, nu parole de păstrat. Parola administratorului trebuie să aibă minimum 12 caractere. Parolele SQL și Relay sunt independente. În URL-ul SQL, caractere precum `@`, `#` sau `%` din parolă trebuie codificate; o parolă lungă, aleatorie, cu litere și cifre simplifică această configurare.
@@ -132,7 +120,7 @@ Verificări de final:
 
 - autentificarea afișează organizația și rolul așteptate;
 - poți crea o competență și un agent;
-- Test AI local vede modelul și poate salva o solicitare de test;
+- Reguli de dispecerizare poate evalua și salva un task de test;
 - datele rămân după reîncărcarea paginii și restartul backendului;
 - înregistrezi versiunea codului, modelul și rezultatul testului.
 
@@ -140,14 +128,14 @@ Testele manuale creează date persistente. Folosește exemple fictive sau aproba
 
 ## 9. Configurează procesele departamentului
 
-Urmează [manualul administratorului](administrator-guide.md): competențe, agenți, exemple, căsuță de test, ITL și eventual EMMA. Pentru primul email real, pornește numai de la momentul activării și trimite mesajul după confirmare.
+Urmează [manualul administratorului](administrator-guide.md): competențe, agenți, reguli, căsuță de test, ITL și eventual EMMA. Pentru primul email real, pornește numai de la momentul activării și trimite mesajul după confirmare.
 
 ## 10. Pregătește accesul colegilor
 
 Pentru pilotul corporativ, urmează [ghidul HTTPS](corporate-https.md). IT trebuie să confirme găzduirea, DNS-ul stabil, certificatul și ruta de acces. Faptul că aplicația pornește pe Cloud PC nu dovedește că acesta este accesibil de pe PC-urile colegilor.
 
-Nu folosi localhost în linkul trimis agenților. Nu expune PostgreSQL sau Ollama. Nu activa serviciile și firewall-ul prin ocolirea politicilor companiei. Pentru 24/7 sunt necesare procese administrate, recuperare după restart și un calculator care nu intră în sleep; installerul de servicii nu este inclus.
+Nu folosi localhost în linkul trimis agenților. Nu expune PostgreSQL. Nu activa serviciile și firewall-ul prin ocolirea politicilor companiei. Pentru 24/7 sunt necesare procese administrate, recuperare după restart și un calculator care nu intră în sleep; installerul de servicii nu este inclus.
 
 ## Înregistrarea instalării
 
-Păstrează privat: gazda și responsabilul, calea proiectului, versiunea codului, versiunea Node/PostgreSQL/Ollama/modelului, ID-ul organizației, numele HTTPS aprobat, directorul de date, modalitatea de pornire, destinația backupului și data ultimei restaurări testate. Referințele la secrete se înregistrează în managerul de secrete aprobat, nu se copiază în fișa de instalare.
+Păstrează privat: gazda și responsabilul, calea proiectului, versiunea codului, versiunea Node/PostgreSQL, ID-ul organizației, numele HTTPS aprobat, directorul de date, modalitatea de pornire, destinația backupului și data ultimei restaurări testate. Referințele la secrete se înregistrează în managerul de secrete aprobat, nu se copiază în fișa de instalare.

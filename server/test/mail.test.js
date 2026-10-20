@@ -8,8 +8,8 @@ import { connectDb, migrate } from "../db.js";
 import { createVault } from "../vault.js";
 import { createMailService } from "../mail-service.js";
 import { createApp } from "../app.js";
-import { createAiRunner, startWorkers } from "../ai-runner.js";
-import { getContext } from "../context.js";
+import { createRuleService } from "../rules.js";
+import { startWorkers } from "../workers.js";
 import { hashPassword } from "../security.js";
 const url = process.env.TEST_DATABASE_URL;
 if (!url) throw Error("TEST_DATABASE_URL required");
@@ -152,7 +152,7 @@ before(async () => {
       verify: async () => "admin@example.test",
     },
   });
-  runner = createAiRunner(db, ollama);
+  runner = createRuleService(db);
   await db.query("INSERT INTO organizations(id,name) VALUES($1,$2),($3,$4)", [
     org,
     "Mail firm",
@@ -184,7 +184,7 @@ before(async () => {
   ]);
   server = createApp(db, {
     ollama,
-    aiRunner: runner,
+    ruleService: runner,
     mailService: service,
   }).listen(0, "127.0.0.1");
   await new Promise((r) => server.once("listening", r));
@@ -267,7 +267,7 @@ test("sync and remote search import into a persistent queue without duplicate ta
     0,
   );
   assert.equal(
-    (await db.query("SELECT count(*)::int n FROM processing_jobs")).rows[0].n,
+    (await db.query("SELECT count(*)::int n FROM dispatch_jobs")).rows[0].n,
     1,
   );
   const found = await request("/mail-connections/" + connectionId + "/search", {
@@ -302,14 +302,20 @@ test("sync and remote search import into a persistent queue without duplicate ta
   assert.equal(row.last_error, "MAIL_NETWORK");
   providerFailure = false;
 });
-test("worker resumes persisted jobs, dispatches once, and does not learn unconfirmed AI labels", async () => {
-  const stop = startWorkers(db, service, runner, { intervalMs: 20 });
+test("worker resumes persisted rule jobs and dispatches exactly once without model calls", async () => {
+  await runner.save(org, {
+    name: "Facturi",
+    skillId: sa,
+    enabled: true,
+    conditions: [{ field: "subject", operator: "contains", value: "factură" }],
+  });
+  const stop = startWorkers(db, service, runner, undefined, { intervalMs: 20 });
   try {
     await waitFor(
       async () =>
         (
           await db.query(
-            "SELECT count(*)::int n FROM processing_jobs WHERE state='done'",
+            "SELECT count(*)::int n FROM dispatch_jobs WHERE state='done'",
           )
         ).rows[0].n === 1,
     );
@@ -320,153 +326,28 @@ test("worker resumes persisted jobs, dispatches once, and does not learn unconfi
     await db.query("SELECT * FROM messages WHERE external_id='source-1'")
   ).rows[0];
   assert.equal(row.assigned_to, a);
-  assert.equal(row.tag_source, "ai");
+  assert.equal(row.tag_source, "rule");
+  assert.equal(captured, undefined);
   assert.equal(
-    (await getContext(db, org, "Factură importantă", row.body)).length,
+    (await db.query("SELECT count(*)::int n FROM classifications")).rows[0].n,
     0,
   );
-});
-test("corrected human tag is authoritative, retrieved with current tag and supersedes contradictory seed example", async () => {
-  const m = (
-    await db.query("SELECT * FROM messages WHERE external_id='source-1'")
-  ).rows[0];
-  await request("/examples", {
-    body: { skillId: sa, subject: m.subject, body: m.body },
-  });
+  assert.equal((await request("/ai/status")).status, 410);
   assert.equal(
     (
-      await request("/messages/" + m.id, {
+      await request("/messages/" + row.id, {
         method: "PATCH",
-        session: agentCookie,
         body: { skillId: sb },
       })
     ).status,
     204,
   );
-  const current = (await db.query("SELECT * FROM messages WHERE id=$1", [m.id]))
-    .rows[0];
-  assert.equal(current.tag_source, "human");
-  assert.equal(current.skill_id, sb);
-  assert.equal(current.assigned_to, b);
-  const context = await getContext(db, org, m.subject, m.body);
-  assert.equal(context.length, 1);
-  assert.equal(context[0].source, "human-confirmed");
-  assert.equal(context[0].skillId, sb);
-  assert.equal((await getContext(db, otherOrg, m.subject, m.body)).length, 0);
+  assert.equal((await runner.process(org, row.id)).cancelled, true);
   assert.equal(
-    (
-      await request("/messages/" + m.id + "/retry-classification", {
-        method: "POST",
-      })
-    ).status,
-    409,
+    (await db.query("SELECT tag_source FROM messages WHERE id=$1", [row.id]))
+      .rows[0].tag_source,
+    "human",
   );
-  assert.equal((await runner.process(org, m.id)).cancelled, true);
-});
-test("a correction made during inference is not overwritten, and worker job is cancelled", async () => {
-  remoteMessages = [raw("source-2", "Problemă nouă")];
-  await service.sync(connectionId, org);
-  const m = (
-    await db.query("SELECT * FROM messages WHERE external_id='source-2'")
-  ).rows[0];
-  blockModel = true;
-  releaseModel = null;
-  const stop = startWorkers(db, service, runner, { intervalMs: 20 });
-  try {
-    await waitFor(() => !!releaseModel);
-    assert.equal(
-      (
-        await request("/messages/" + m.id, {
-          method: "PATCH",
-          body: { skillId: sb, assignedTo: null },
-        })
-      ).status,
-      204,
-    );
-    releaseModel();
-    blockModel = false;
-    await waitFor(
-      async () =>
-        (
-          await db.query(
-            "SELECT state FROM processing_jobs WHERE message_id=$1",
-            [m.id],
-          )
-        ).rows[0].state === "cancelled",
-    );
-  } finally {
-    releaseModel?.();
-    blockModel = false;
-    await stop();
-  }
-  const updated = (await db.query("SELECT * FROM messages WHERE id=$1", [m.id]))
-    .rows[0];
-  assert.equal(updated.tag_source, "human");
-  assert.equal(updated.skill_id, sb);
-  assert.equal(
-    (
-      await db.query("SELECT 1 FROM classifications WHERE message_id=$1", [
-        m.id,
-      ])
-    ).rowCount,
-    0,
-  );
-});
-test("model outage retains task and schedules retry; admin can requeue after recovery", async () => {
-  remoteMessages = [raw("source-3")];
-  await service.sync(connectionId, org);
-  const m = (
-    await db.query("SELECT * FROM messages WHERE external_id='source-3'")
-  ).rows[0];
-  modelFailure = true;
-  let stop = startWorkers(db, service, runner, { intervalMs: 20 });
-  try {
-    await waitFor(
-      async () =>
-        (
-          await db.query(
-            "SELECT state FROM processing_jobs WHERE message_id=$1",
-            [m.id],
-          )
-        ).rows[0].state === "retry",
-    );
-  } finally {
-    await stop();
-  }
-  assert.equal(
-    (await db.query("SELECT assigned_to FROM messages WHERE id=$1", [m.id]))
-      .rows[0].assigned_to,
-    null,
-  );
-  modelFailure = false;
-  assert.equal(
-    (
-      await request("/messages/" + m.id + "/retry-classification", {
-        method: "POST",
-      })
-    ).status,
-    202,
-  );
-  stop = startWorkers(db, service, runner, { intervalMs: 20 });
-  try {
-    await waitFor(
-      async () =>
-        (
-          await db.query(
-            "SELECT state FROM processing_jobs WHERE message_id=$1",
-            [m.id],
-          )
-        ).rows[0].state === "done",
-    );
-  } finally {
-    await stop();
-  }
-  assert.equal(
-    (await db.query("SELECT assigned_to FROM messages WHERE id=$1", [m.id]))
-      .rows[0].assigned_to,
-    a,
-  );
-  assert.ok(captured.examples.some((e) => e.source === "human-confirmed"));
 });
 test("Microsoft device authorization binds flow to organization and never returns private device or refresh token", async () => {
   const id = (
@@ -523,16 +404,16 @@ test("expired worker lease is recovered after an interrupted process", async () 
     )
   ).rows[0];
   await db.query(
-    "UPDATE processing_jobs SET state='running',attempts=1,lease_until=now()-interval '1 minute' WHERE message_id=$1",
+    "UPDATE dispatch_jobs SET state='running',attempts=1,lease_until=now()-interval '1 minute' WHERE message_id=$1",
     [m.id],
   );
-  const stop = startWorkers(db, service, runner, { intervalMs: 20 });
+  const stop = startWorkers(db, service, runner, undefined, { intervalMs: 20 });
   try {
     await waitFor(
       async () =>
         (
           await db.query(
-            "SELECT state FROM processing_jobs WHERE message_id=$1",
+            "SELECT state FROM dispatch_jobs WHERE message_id=$1",
             [m.id],
           )
         ).rows[0].state === "done",
@@ -542,48 +423,11 @@ test("expired worker lease is recovered after an interrupted process", async () 
   }
   assert.equal(
     (
-      await db.query(
-        "SELECT attempts FROM processing_jobs WHERE message_id=$1",
-        [m.id],
-      )
+      await db.query("SELECT attempts FROM dispatch_jobs WHERE message_id=$1", [
+        m.id,
+      ])
     ).rows[0].attempts,
     2,
-  );
-});
-test("human can confirm a correct AI label without redispatch and direct classification cannot overwrite it", async () => {
-  const m = (
-    await db.query(
-      "SELECT * FROM messages WHERE external_id='source-after-crash'",
-    )
-  ).rows[0];
-  const count = (
-    await db.query(
-      "SELECT count(*)::int n FROM classifications WHERE message_id=$1",
-      [m.id],
-    )
-  ).rows[0].n;
-  assert.equal(
-    (
-      await request("/messages/" + m.id + "/confirm-tag", {
-        method: "POST",
-        session: agentCookie,
-      })
-    ).status,
-    204,
-  );
-  const updated = (await db.query("SELECT * FROM messages WHERE id=$1", [m.id]))
-    .rows[0];
-  assert.equal(updated.tag_source, "human");
-  assert.equal(updated.assigned_to, m.assigned_to);
-  assert.equal((await runner.process(org, m.id)).cancelled, true);
-  assert.equal(
-    (
-      await db.query(
-        "SELECT count(*)::int n FROM classifications WHERE message_id=$1",
-        [m.id],
-      )
-    ).rows[0].n,
-    count,
   );
 });
 test("start-now arms monitoring atomically without importing existing mail and persists the chosen baseline", async () => {
@@ -654,21 +498,37 @@ test("monitoring settings persist; disconnect/removal keep imported history", as
     (await service.list(org)).find((r) => r.id === connectionId).enabled,
     true,
   );
+  const beforeRemoval = (
+    await db.query("SELECT count(*)::int n FROM messages WHERE mailbox_id=$1", [
+      mailboxId,
+    ])
+  ).rows[0].n;
+  assert.ok(beforeRemoval > 0);
   await service.disconnect(connectionId, org);
   const row = (await service.list(org)).find((r) => r.id === connectionId);
   assert.equal(row.enabled, false);
   assert.equal(row.authorized, false);
-  assert.ok(
-    (await db.query("SELECT 1 FROM messages WHERE mailbox_id=$1", [mailboxId]))
-      .rowCount >= 3,
+  assert.equal(
+    (
+      await db.query(
+        "SELECT count(*)::int n FROM messages WHERE mailbox_id=$1",
+        [mailboxId],
+      )
+    ).rows[0].n,
+    beforeRemoval,
   );
   await service.remove(connectionId, org);
   assert.equal(
     (await service.list(org)).some((r) => r.id === connectionId),
     false,
   );
-  assert.ok(
-    (await db.query("SELECT 1 FROM messages WHERE mailbox_id=$1", [mailboxId]))
-      .rowCount >= 3,
+  assert.equal(
+    (
+      await db.query(
+        "SELECT count(*)::int n FROM messages WHERE mailbox_id=$1",
+        [mailboxId],
+      )
+    ).rows[0].n,
+    beforeRemoval,
   );
 });
